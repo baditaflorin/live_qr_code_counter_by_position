@@ -1,102 +1,87 @@
 # Deploying to your Proxmox VMs
 
 Target setup:
-- **Public IP:** `176.9.123.221`
+- **Bastion (public):** `0docker.com` → `176.9.123.221`
 - **Domain:** `live-qr.wemeshup.com` (TTL 300)
-- **Nginx VM:** `10.10.10.10` — terminates TLS, reverse-proxies
-- **App VM:** `10.10.10.20` — runs the dockerized backend
-- **Image registry:** GHCR — auto-published on every push to `master` (see [docker.yml](../.github/workflows/docker.yml))
+- **Nginx VM (internal):** `10.10.10.10` — terminates TLS, reverse-proxies (reach via `ssh -J root@0docker.com root@10.10.10.10`)
+- **App VM (internal):** `10.10.10.20` — runs the dockerized backend (reach via `ssh -J root@0docker.com root@10.10.10.20`)
 
-## 0. DNS + port forwarding (one-time, on you)
+No registry, no GitHub Actions. The app VM clones the repo and `docker compose up --build -d`.
 
-GitHub Actions can't manage your DNS or your gateway, so do these manually first:
+## 0. DNS + port forwarding (one-time)
 
-1. **Create A record** at your DNS provider:
+1. **A record:**
    ```
    live-qr.wemeshup.com  IN  A  176.9.123.221  TTL 300
    ```
-   Verify: `dig +short live-qr.wemeshup.com` should return `176.9.123.221`.
+   Verify from anywhere: `dig +short live-qr.wemeshup.com` → `176.9.123.221`.
 
-2. **Forward ports** on your gateway / Proxmox host to the nginx VM:
+2. **Forward ports** on `0docker.com` / Proxmox host to the nginx VM:
    ```
    176.9.123.221:80   →  10.10.10.10:80
    176.9.123.221:443  →  10.10.10.10:443
    ```
 
-## 1. Wait for the image to be published
-
-Every push to `master` triggers the workflow at [.github/workflows/docker.yml](../.github/workflows/docker.yml). Watch it:
+## 1. App VM (10.10.10.20)
 
 ```bash
-gh run watch          # from your laptop, in the repo directory
-gh run list --limit 5 # last 5 runs
-```
+ssh -J root@0docker.com root@10.10.10.20
 
-When it's green, the image is at:
-```
-ghcr.io/baditaflorin/live_qr_code_counter_by_position:latest
-```
+# Docker (skip if already there)
+command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
 
-The package is **public** because the repo is public. No login needed to pull.
+# Clone + run
+mkdir -p /opt && cd /opt
+git clone https://github.com/baditaflorin/live_qr_code_counter_by_position.git live-qr
+cd live-qr
+docker compose up --build -d
 
-## 2. Set up the app VM (10.10.10.20)
-
-SSH in, then:
-
-```bash
-# Install docker if it's not there yet
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER && newgrp docker
-
-# Drop the deploy compose file in place
-sudo mkdir -p /opt/live-qr && cd /opt/live-qr
-sudo curl -fsSL -o docker-compose.yml \
-  https://raw.githubusercontent.com/baditaflorin/live_qr_code_counter_by_position/master/deploy/docker-compose.prod.yml
-
-# Pull + run
-sudo docker compose pull
-sudo docker compose up -d
-
-# Smoke-test: hit the app from the same VM
+# Smoke-test
 curl -s http://localhost:8000/api/system
-# → {"dictionary":"DICT_4X4_250","dictionary_size":250,"data_dir":"/data"}
+# → {"dictionary":"DICT_4X4_100","dictionary_size":100,"data_dir":"/data"}
 ```
 
 Persistent data lives in `/opt/live-qr/data/app.db`.
 
-To update later:
+To switch to a larger marker dictionary later (more IDs, slightly harder detection at distance):
+```bash
+sed -i 's/DICT_4X4_100/DICT_4X4_250/' docker-compose.yml
+docker compose up --build -d
+```
+(Existing marker IDs <100 keep working — dictionary IDs nest.)
+
+To update after a `git push` from your laptop:
 ```bash
 cd /opt/live-qr
-sudo docker compose pull && sudo docker compose up -d
+git pull
+docker compose up --build -d
 ```
 
-If the app VM's firewall blocks 8000 from other LAN hosts, allow the nginx VM:
+If the app VM has a host firewall, allow nginx VM through:
 ```bash
-sudo ufw allow from 10.10.10.10 to any port 8000
+ufw allow from 10.10.10.10 to any port 8000 || true
 ```
 
-## 3. Set up the nginx VM (10.10.10.10)
+## 2. Nginx VM (10.10.10.10)
 
 ```bash
-sudo apt update
-sudo apt install -y nginx certbot python3-certbot-nginx
+ssh -J root@0docker.com root@10.10.10.10
 
-# Drop the connection-upgrade map (needed for WebSocket)
-sudo curl -fsSL -o /etc/nginx/conf.d/connection-upgrade.conf \
+apt update
+apt install -y nginx certbot python3-certbot-nginx git
+
+# Pull just the nginx files (no need for the full repo here)
+cd /tmp
+curl -fsSL -o connection-upgrade.conf \
   https://raw.githubusercontent.com/baditaflorin/live_qr_code_counter_by_position/master/deploy/connection-upgrade.conf
-
-# Drop the vhost
-sudo curl -fsSL -o /etc/nginx/sites-available/live-qr.conf \
+curl -fsSL -o live-qr.conf \
   https://raw.githubusercontent.com/baditaflorin/live_qr_code_counter_by_position/master/deploy/live-qr.conf
 
-# IMPORTANT: the vhost references TLS files that don't exist yet — comment out
-# the listen 443 server block before the first nginx reload, OR get the cert first
-# with certbot's standalone mode. Easiest path: certbot --nginx will edit nginx
-# for you, but for that the vhost must NOT yet have a 443 block.
-#
-# So first install a temporary HTTP-only vhost, get the cert, then swap in the full one.
+mv connection-upgrade.conf /etc/nginx/conf.d/
+mv live-qr.conf /etc/nginx/sites-available/
 
-cat <<'EOF' | sudo tee /etc/nginx/sites-available/live-qr-bootstrap.conf
+# Bootstrap vhost — HTTP only, lets certbot get the cert before we enable 443
+cat > /etc/nginx/sites-available/live-qr-bootstrap.conf <<'EOF'
 server {
     listen 80;
     server_name live-qr.wemeshup.com;
@@ -105,65 +90,52 @@ server {
 }
 EOF
 
-sudo mkdir -p /var/www/certbot
-sudo ln -sf /etc/nginx/sites-available/live-qr-bootstrap.conf /etc/nginx/sites-enabled/live-qr.conf
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t && sudo systemctl reload nginx
+mkdir -p /var/www/certbot
+ln -sf /etc/nginx/sites-available/live-qr-bootstrap.conf /etc/nginx/sites-enabled/live-qr.conf
+rm -f /etc/nginx/sites-enabled/default
+nginx -t && systemctl reload nginx
 
-# Confirm DNS is reachable from the public internet:
-# from another machine: curl http://live-qr.wemeshup.com  → "bootstrap"
+# Confirm reachability from the public internet before asking certbot to challenge
+# (from your laptop):  curl http://live-qr.wemeshup.com/   → "bootstrap"
 
-# Get the cert (HTTP-01 via webroot)
-sudo certbot certonly --webroot -w /var/www/certbot -d live-qr.wemeshup.com \
+# Get the cert
+certbot certonly --webroot -w /var/www/certbot -d live-qr.wemeshup.com \
     --agree-tos -m baditaflorin@gmail.com --no-eff-email
 
 # Swap in the production vhost
-sudo ln -sf /etc/nginx/sites-available/live-qr.conf /etc/nginx/sites-enabled/live-qr.conf
-sudo nginx -t && sudo systemctl reload nginx
+ln -sf /etc/nginx/sites-available/live-qr.conf /etc/nginx/sites-enabled/live-qr.conf
+nginx -t && systemctl reload nginx
 ```
 
-Test from anywhere:
+Verify from your laptop:
 ```bash
-curl -I https://live-qr.wemeshup.com/
-# → HTTP/2 200
+curl -I https://live-qr.wemeshup.com/        # → HTTP/2 200
 ```
 
-Open in your browser: <https://live-qr.wemeshup.com/admin>
+Open: https://live-qr.wemeshup.com/admin
 
-### Cert renewal
+## 3. Why TLS isn't optional
 
-`certbot` adds a systemd timer automatically. Reload nginx after each renewal:
-```bash
-sudo systemctl edit certbot.service
-# add:
-# [Service]
-# ExecStartPost=/bin/systemctl reload nginx
-```
+Phones won't grant `getUserMedia` (camera) permission over plain HTTP from non-localhost origins. The whole live-counter flow only works on HTTPS.
 
-## 4. Point the live page at the right host
-
-Once HTTPS is up, `location.host` inside the browser will already be `live-qr.wemeshup.com`, so:
+Once HTTPS is up, the in-browser `location.host` is `live-qr.wemeshup.com`, so:
 - Phone-share QR codes auto-encode `https://live-qr.wemeshup.com/m/{id}` ✓
-- WebSocket upgrades to `wss://live-qr.wemeshup.com/ws/detect` ✓
-- Camera permission prompt works (HTTPS is required for `getUserMedia` from non-localhost) ✓
-
-That last point is the reason TLS is non-optional: phones won't grant camera access over plain HTTP.
+- WebSockets upgrade to `wss://live-qr.wemeshup.com/ws/detect` ✓
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| `502 Bad Gateway` on the domain | App VM down, or nginx can't reach `10.10.10.20:8000`. Check `curl http://10.10.10.20:8000/api/system` from the nginx VM. |
-| Live page connects to `/ws/detect` then immediately disconnects | The `connection-upgrade.conf` map is missing or the `Connection`/`Upgrade` headers aren't being passed. `sudo nginx -T \| grep -A2 connection_upgrade`. |
-| Cert renewal fails after success | Nginx isn't serving the ACME path through the proxy. Keep the `location /.well-known/acme-challenge/` block in the HTTP vhost. |
-| Phones can't grant camera access | You're hitting an `http://` URL. `getUserMedia` requires HTTPS or `localhost`. |
+| `502 Bad Gateway` on the domain | App VM down, or nginx can't reach `10.10.10.20:8000`. From the nginx VM: `curl http://10.10.10.20:8000/api/system`. |
+| Live page connects to `/ws/detect` then disconnects | The `connection-upgrade.conf` map is missing or headers aren't being passed. `nginx -T \| grep -A2 connection_upgrade`. |
+| Cert renewal fails | The `location /.well-known/acme-challenge/` block must stay reachable over plain HTTP. The vhost in this repo keeps it. |
+| Camera permission denied on phones | Hitting `http://` instead of `https://`. |
 
 ## Quick reference
 
-| Action | Command |
-|---|---|
-| Update the app | `cd /opt/live-qr && sudo docker compose pull && sudo docker compose up -d` |
-| Rollback to a specific image tag | edit `docker-compose.yml`, set `:latest` to e.g. `:abc1234`, then `pull && up -d` |
-| Tail app logs | `sudo docker compose -f /opt/live-qr/docker-compose.yml logs -f` |
-| Reload nginx | `sudo nginx -t && sudo systemctl reload nginx` |
-| Force cert renew | `sudo certbot renew --force-renewal && sudo systemctl reload nginx` |
+| Action | On VM | Command |
+|---|---|---|
+| Update app from latest master | app | `cd /opt/live-qr && git pull && docker compose up --build -d` |
+| Tail app logs | app | `docker compose -f /opt/live-qr/docker-compose.yml logs -f` |
+| Reload nginx | nginx | `nginx -t && systemctl reload nginx` |
+| Force cert renew | nginx | `certbot renew --force-renewal && systemctl reload nginx` |
