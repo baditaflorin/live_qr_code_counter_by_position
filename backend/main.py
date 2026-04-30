@@ -17,13 +17,15 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from . import detection, markers as marker_gen
+from . import detection, markers as marker_gen, tracking as tracking_mod
 from .db import (
-    Marker, Person, Question, Vote, Zone, get_db, init_db,
+    Marker, Person, Question, TrackingSample, TrackingSession, Vote, Zone,
+    get_db, init_db,
 )
 from .schemas import (
     MarkerAssign, MarkerCreateBatch, MarkerOut, PersonIn, PersonOut, QuestionBulkIn,
-    QuestionIn, QuestionOut, VoteOut, ZoneIn, ZoneOut, ZonePatch,
+    QuestionIn, QuestionOut, TrackingSessionIn, TrackingSessionOut, VoteOut,
+    ZoneIn, ZoneOut, ZonePatch,
 )
 from .seeds.czocha_day1 import as_records as _czocha_day1_records
 from .seeds.default_zones import records_for as _default_zones_records, DEFAULTS_BY_FORMATION
@@ -678,6 +680,163 @@ def _count_by_zone(votes: list[Vote]) -> dict[str, int]:
     return out
 
 
+# ---------- tracking ----------
+
+def _tracking_to_out(s: TrackingSession, sample_count: int = 0, markers_seen: int = 0) -> TrackingSessionOut:
+    return TrackingSessionOut(
+        id=s.id, name=s.name,
+        proximity_norm=s.proximity_norm,
+        sample_interval_ms=s.sample_interval_ms,
+        started_at=s.started_at, stopped_at=s.stopped_at,
+        sample_count=sample_count, markers_seen=markers_seen,
+    )
+
+
+def _tracking_session_stats(db: Session, session_id: int) -> tuple[int, int]:
+    sample_count = db.execute(
+        select(func.count(TrackingSample.id)).where(TrackingSample.session_id == session_id)
+    ).scalar() or 0
+    markers_seen = db.execute(
+        select(func.count(func.distinct(TrackingSample.marker_aruco_id)))
+        .where(TrackingSample.session_id == session_id)
+    ).scalar() or 0
+    return int(sample_count), int(markers_seen)
+
+
+@app.get("/api/tracking/sessions", response_model=list[TrackingSessionOut])
+def list_tracking_sessions(db: Session = Depends(get_db)):
+    rows = db.execute(
+        select(TrackingSession).order_by(TrackingSession.started_at.desc())
+    ).scalars().all()
+    out: list[TrackingSessionOut] = []
+    for s in rows:
+        sc, ms = _tracking_session_stats(db, s.id)
+        out.append(_tracking_to_out(s, sc, ms))
+    return out
+
+
+@app.get("/api/tracking/sessions/active", response_model=Optional[TrackingSessionOut])
+def get_active_tracking(db: Session = Depends(get_db)):
+    s = db.execute(
+        select(TrackingSession).where(TrackingSession.stopped_at.is_(None))
+        .order_by(TrackingSession.started_at.desc())
+    ).scalars().first()
+    if not s:
+        return None
+    sc, ms = _tracking_session_stats(db, s.id)
+    return _tracking_to_out(s, sc, ms)
+
+
+@app.post("/api/tracking/sessions", response_model=TrackingSessionOut)
+def start_tracking(payload: TrackingSessionIn, db: Session = Depends(get_db)):
+    # Stop any other active session first — only one at a time.
+    db.query(TrackingSession).filter(TrackingSession.stopped_at.is_(None)).update(
+        {TrackingSession.stopped_at: datetime.utcnow()}, synchronize_session=False
+    )
+    s = TrackingSession(
+        name=payload.name.strip() or f"Session {datetime.utcnow().isoformat(timespec='seconds')}",
+        proximity_norm=max(0.01, min(payload.proximity_norm, 1.0)),
+        sample_interval_ms=max(100, min(payload.sample_interval_ms, 10000)),
+    )
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return _tracking_to_out(s)
+
+
+@app.put("/api/tracking/sessions/{session_id}/stop", response_model=TrackingSessionOut)
+def stop_tracking(session_id: int, db: Session = Depends(get_db)):
+    s = db.get(TrackingSession, session_id)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if s.stopped_at is None:
+        s.stopped_at = datetime.utcnow()
+        db.commit()
+        db.refresh(s)
+    sc, ms = _tracking_session_stats(db, s.id)
+    return _tracking_to_out(s, sc, ms)
+
+
+@app.delete("/api/tracking/sessions/{session_id}")
+def delete_tracking(session_id: int, db: Session = Depends(get_db)):
+    s = db.get(TrackingSession, session_id)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    db.delete(s)
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/tracking/sessions/{session_id}/report")
+def tracking_report(session_id: int, db: Session = Depends(get_db)):
+    s = db.get(TrackingSession, session_id)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    report = tracking_mod.compute_report(db, s)
+    sc, ms = _tracking_session_stats(db, s.id)
+    return {
+        "session": _tracking_to_out(s, sc, ms).model_dump(),
+        **report,
+    }
+
+
+# Per-process throttle: only one DB write per session per sample_interval,
+# even if multiple WS clients are streaming frames simultaneously. Each
+# entry holds the monotonic time of the last write for that session id.
+_last_tracking_write: dict[int, float] = {}
+
+
+def _record_tracking_samples(
+    session_id: int,
+    sample_interval_ms: int,
+    detections_payload: list[dict],
+    now_monotonic: float,
+) -> None:
+    last = _last_tracking_write.get(session_id, 0.0)
+    if (now_monotonic - last) * 1000.0 < sample_interval_ms:
+        return
+    _last_tracking_write[session_id] = now_monotonic
+    if not detections_payload:
+        return
+    from .db import SessionLocal
+    db = SessionLocal()
+    try:
+        ts = datetime.utcnow()
+        rows = [
+            TrackingSample(
+                session_id=session_id, t=ts,
+                marker_aruco_id=d["aruco_id"],
+                x_norm=float(d["center_norm"][0]),
+                y_norm=float(d["center_norm"][1]),
+            )
+            for d in detections_payload
+        ]
+        db.bulk_save_objects(rows)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _load_active_tracking() -> Optional[dict]:
+    from .db import SessionLocal
+    db = SessionLocal()
+    try:
+        s = db.execute(
+            select(TrackingSession).where(TrackingSession.stopped_at.is_(None))
+            .order_by(TrackingSession.started_at.desc())
+        ).scalars().first()
+        if not s:
+            return None
+        return {
+            "id": s.id, "name": s.name,
+            "proximity_norm": s.proximity_norm,
+            "sample_interval_ms": s.sample_interval_ms,
+            "started_at": s.started_at.isoformat(),
+        }
+    finally:
+        db.close()
+
+
 # ---------- live detection websocket ----------
 
 @app.websocket("/ws/detect")
@@ -686,6 +845,7 @@ async def ws_detect(ws: WebSocket):
     last_state_reload = 0.0
     cached_zones: list[dict] = []
     cached_active: Optional[dict] = None
+    cached_tracking: Optional[dict] = None
 
     try:
         while True:
@@ -695,6 +855,7 @@ async def ws_detect(ws: WebSocket):
                 cached_active = _load_active_question()
                 active_formation = cached_active.get("formation") if cached_active else None
                 cached_zones = _load_zones_dict(formation=active_formation)
+                cached_tracking = _load_active_tracking()
                 last_state_reload = now
 
             arr = np.frombuffer(data, dtype=np.uint8)
@@ -734,12 +895,22 @@ async def ws_detect(ws: WebSocket):
                     }
                 )
 
+            # Tracking: drop a sample row per visible marker, throttled per session.
+            if cached_tracking:
+                _record_tracking_samples(
+                    cached_tracking["id"],
+                    cached_tracking["sample_interval_ms"],
+                    detections_payload,
+                    now,
+                )
+
             await ws.send_json(
                 {
                     "ok": True,
                     "frame_w": w,
                     "frame_h": h,
                     "active_question": cached_active,
+                    "active_tracking": cached_tracking,
                     "zones": cached_zones,
                     "detections": detections_payload,
                     "zone_counts": zone_counts,
@@ -842,6 +1013,11 @@ def root():
 @app.get("/admin")
 def admin():
     return FileResponse(str(FRONTEND / "admin.html"))
+
+
+@app.get("/track")
+def track_page():
+    return FileResponse(str(FRONTEND / "track.html"))
 
 
 @app.get("/m/{aruco_id}")

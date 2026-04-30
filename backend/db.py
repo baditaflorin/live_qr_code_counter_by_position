@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint,
+    Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
     create_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
@@ -86,6 +86,39 @@ class Vote(Base):
 
     __table_args__ = (
         UniqueConstraint("snapshot_id", "marker_aruco_id", name="uq_snapshot_marker"),
+    )
+
+
+class TrackingSession(Base):
+    """A 'who-was-where, with whom, for how long' recording window.
+
+    While a session has stopped_at = NULL, the WS detection loop records one
+    TrackingSample per visible marker every `sample_interval_ms` milliseconds.
+    Reports are computed on demand from raw positions so the proximity
+    threshold can be tuned after the fact.
+    """
+    __tablename__ = "tracking_sessions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    proximity_norm: Mapped[float] = mapped_column(Float, default=0.12)
+    sample_interval_ms: Mapped[int] = mapped_column(Integer, default=500)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    stopped_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class TrackingSample(Base):
+    __tablename__ = "tracking_samples"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("tracking_sessions.id", ondelete="CASCADE"), index=True
+    )
+    t: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    marker_aruco_id: Mapped[int] = mapped_column(Integer)
+    x_norm: Mapped[float] = mapped_column(Float)
+    y_norm: Mapped[float] = mapped_column(Float)
+
+    __table_args__ = (
+        Index("ix_tracking_samples_session_t", "session_id", "t"),
     )
 
 

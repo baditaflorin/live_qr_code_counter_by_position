@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Track</title>
+<link rel="stylesheet" href="/static/styles.css" />
+<style>
+  .disabled-section { opacity: 0.5; pointer-events: none; }
+  .track-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 16px;
+    align-items: flex-start;
+  }
+  @media (max-width: 900px) { .track-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header class="app-header">
+  <h1>Tracking — proximity & clusters</h1>
+  <nav>
+    <a href="/">Live</a>
+    <a href="/admin">Admin</a>
+    <a href="/track" class="active">Track</a>
+  </nav>
+</header>
+<main>
+  <div class="panel">
+    <div class="row">
+      <label>Camera: <select id="camera-select"></select></label>
+      <label>Resolution:
+        <select id="resolution">
+          <option value="640x480">640×480</option>
+          <option value="1280x720" selected>1280×720</option>
+          <option value="1920x1080">1920×1080</option>
+        </select>
+      </label>
+      <label>FPS:
+        <select id="fps">
+          <option>5</option>
+          <option selected>10</option>
+          <option>15</option>
+          <option>20</option>
+        </select>
+      </label>
+      <button id="start-cam-btn" class="primary">Start camera</button>
+      <button id="stop-cam-btn" disabled>Stop camera</button>
+      <span class="spacer"></span>
+      <span id="status" class="status-pill">idle</span>
+      <span id="fps-actual" class="muted"></span>
+    </div>
+  </div>
+
+  <!-- Active session banner -->
+  <div class="panel" id="track-active-banner" style="border-left: 4px solid var(--accent);" hidden>
+    <div class="row">
+      <div>
+        <div class="muted" style="font-size:12px;">recording</div>
+        <div id="track-active-name" style="font-size:18px; font-weight:600;"></div>
+        <div id="track-active-stats" class="muted" style="font-size:13px;"></div>
+      </div>
+      <span class="spacer"></span>
+      <button id="track-stop-btn" class="warn" disabled>Stop tracking</button>
+    </div>
+  </div>
+
+  <!-- Start session form -->
+  <div class="panel" id="track-start-form">
+    <h3 style="margin-top:0;">Start a tracking session</h3>
+    <div class="row">
+      <input id="track-name" type="text" placeholder="Name (e.g. Day 1 mingling)" style="flex: 1; min-width: 240px;" />
+      <label title="Maximum normalized image distance for two markers to be considered 'together'.">
+        Proximity:
+        <input id="track-proximity" type="number" min="0.02" max="1" step="0.01" value="0.12" style="width:80px;" />
+      </label>
+      <label title="How often a sample is written. Smaller = finer-grained, more rows.">
+        Sample every:
+        <input id="track-interval" type="number" min="100" max="10000" step="100" value="500" style="width:80px;" />ms
+      </label>
+      <button id="track-start-btn" class="primary">Start tracking</button>
+    </div>
+    <div class="muted" style="margin-top:6px; font-size:12px;">
+      Position samples are written every <em>sample-interval</em> while a session is active. Pairs whose centres are within <em>proximity</em> in normalized image coordinates are counted as "together" — tune to your camera's framing (smaller = stricter).
+    </div>
+  </div>
+
+  <div class="track-grid">
+    <div>
+      <div class="video-wrap" id="video-wrap">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay" class="overlay"></canvas>
+      </div>
+      <div class="panel" style="margin-top:12px;">
+        <div class="row">
+          <label title="Used only for the live overlay — recorded sessions use their own stored value.">
+            Visualisation proximity:
+            <input id="proximity-vis" type="number" min="0.02" max="1" step="0.01" value="0.12" style="width:80px;" />
+          </label>
+          <span class="spacer"></span>
+          <span id="detected-list" class="muted">No markers in view.</span>
+        </div>
+      </div>
+    </div>
+    <aside>
+      <div class="panel">
+        <h3 style="margin-top:0;">Live clusters</h3>
+        <div id="cluster-list">
+          <div class="muted">Start the camera and a session to see clusters.</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-top:0;">Sessions</h3>
+    <div id="track-sessions-list"></div>
+  </div>
+
+  <div class="panel" id="track-report-panel" hidden>
+    <div class="row" style="margin-bottom: 12px;">
+      <h3 style="margin-top:0;">Report</h3>
+      <span class="spacer"></span>
+      <button onclick="document.getElementById('track-report-panel').hidden = true;">Close</button>
+    </div>
+    <div id="track-report-body"></div>
+  </div>
+</main>
+<script type="module" src="/static/track/main.js"></script>
+</body>
+</html>

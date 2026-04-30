@@ -97,3 +97,31 @@ class VoteOut(BaseModel):
     person_id: Optional[int]
     person_name: Optional[str]
     recorded_at: datetime
+
+
+class TrackingSessionIn(BaseModel):
+    name: str
+    proximity_norm: float = 0.12
+    sample_interval_ms: int = 500
+
+
+class TrackingSessionOut(BaseModel):
+    id: int
+    name: str
+    proximity_norm: float
+    sample_interval_ms: int
+    started_at: datetime
+    stopped_at: Optional[datetime] = None
+    sample_count: int = 0
+    markers_seen: int = 0
+
+
+class TrackingReport(BaseModel):
+    session: TrackingSessionOut
+    duration_s: float
+    sample_count: int
+    snapshot_count: int
+    markers_seen: list[int]
+    pair_contact_seconds: list[dict]   # [{a, a_name, b, b_name, seconds}]
+    never_met_pairs: list[dict]        # [{a, a_name, b, b_name}]
+    per_person_contact_seconds: list[dict]  # [{aruco_id, person_name, seconds}]
