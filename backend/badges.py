@@ -537,9 +537,11 @@ def _motif_postage_perforation(canvas: Image.Image, opts: BadgeOptions, palette:
 # Each layout dict specifies how the badge composes itself.
 TEMPLATE_LAYOUTS: dict[str, dict] = {
     # Modern, generous whitespace. Marker is a small block, name dominates.
+    # Position accounts for the marker's quiet-zone padding (~10% on each side)
+    # so the right edge lands inside the badge.
     "minimal": {
-        "marker_size_frac": 0.32,
-        "marker_pos_frac": (0.66, 0.10),  # upper-right
+        "marker_size_frac": 0.30,
+        "marker_pos_frac": (0.58, 0.08),  # upper-right with margin
         "marker_rotation_deg": 0,
         "bg_pattern": "paper_grain",
         "motif": None,
@@ -657,6 +659,10 @@ def render_badge(aruco_id: int, name: str, opts: BadgeOptions) -> Image.Image:
         )
     mx = int(opts.badge_w * layout["marker_pos_frac"][0])
     my = int(opts.badge_h * layout["marker_pos_frac"][1])
+    # Clamp so the marker stays fully inside the badge regardless of template
+    # mistakes — a clipped marker can't be detected.
+    mx = max(8, min(mx, opts.badge_w - marker_img.width - 8))
+    my = max(8, min(my, opts.badge_h - marker_img.height - 8))
     canvas.paste(marker_img, (mx, my))
 
     # 4. Foreground motif (drawn on top of the marker layer's surroundings;
