@@ -63,6 +63,9 @@ class Question(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     is_active: Mapped[int] = mapped_column(Integer, default=0)  # 0/1
+    block: Mapped[Optional[str]] = mapped_column(String(200), index=True)
+    formation: Mapped[Optional[str]] = mapped_column(String(40))
+    position: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -86,6 +89,24 @@ class Vote(Base):
 
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    _migrate_questions()
+
+
+def _migrate_questions() -> None:
+    """SQLite schema hand-migration for fields added after first deploy.
+
+    Avoids a hard dependency on Alembic. Only runs ALTER TABLE for missing columns.
+    """
+    needed = {
+        "block":     "ALTER TABLE questions ADD COLUMN block VARCHAR(200)",
+        "formation": "ALTER TABLE questions ADD COLUMN formation VARCHAR(40)",
+        "position":  "ALTER TABLE questions ADD COLUMN position INTEGER DEFAULT 0",
+    }
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(questions)").all()}
+        for col, ddl in needed.items():
+            if col not in cols:
+                conn.exec_driver_sql(ddl)
 
 
 def get_db():

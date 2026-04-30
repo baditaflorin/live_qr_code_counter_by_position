@@ -22,9 +22,10 @@ from .db import (
     Marker, Person, Question, Vote, Zone, get_db, init_db,
 )
 from .schemas import (
-    MarkerAssign, MarkerCreateBatch, MarkerOut, PersonIn, PersonOut, QuestionIn,
-    QuestionOut, VoteOut, ZoneIn, ZoneOut,
+    MarkerAssign, MarkerCreateBatch, MarkerOut, PersonIn, PersonOut, QuestionBulkIn,
+    QuestionIn, QuestionOut, VoteOut, ZoneIn, ZoneOut,
 )
+from .seeds.czocha_day1 import as_records as _czocha_day1_records
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -72,6 +73,9 @@ def _question_to_out(q: Question) -> QuestionOut:
         id=q.id,
         text=q.text,
         is_active=bool(q.is_active),
+        block=q.block,
+        formation=q.formation,
+        position=q.position or 0,
         created_at=q.created_at,
     )
 
@@ -310,19 +314,104 @@ def delete_zone(zone_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/questions", response_model=list[QuestionOut])
 def list_questions(db: Session = Depends(get_db)):
-    rows = db.execute(select(Question).order_by(Question.created_at.desc())).scalars().all()
+    # Order: block (asc, NULLs first), then position, then id — gives a stable
+    # facilitator-friendly sequence when running through a deck.
+    rows = db.execute(
+        select(Question).order_by(
+            Question.block.is_(None).desc(),
+            Question.block.asc(),
+            Question.position.asc(),
+            Question.id.asc(),
+        )
+    ).scalars().all()
     return [_question_to_out(q) for q in rows]
 
 
 @app.post("/api/questions", response_model=QuestionOut)
 def create_question(payload: QuestionIn, db: Session = Depends(get_db)):
-    q = Question(text=payload.text.strip())
-    if not q.text:
+    text = payload.text.strip()
+    if not text:
         raise HTTPException(400, "Text required")
+    q = Question(
+        text=text,
+        block=(payload.block or None),
+        formation=(payload.formation or None),
+        position=payload.position or 0,
+    )
     db.add(q)
     db.commit()
     db.refresh(q)
     return _question_to_out(q)
+
+
+@app.put("/api/questions/{question_id}", response_model=QuestionOut)
+def update_question(question_id: int, payload: QuestionIn, db: Session = Depends(get_db)):
+    q = db.get(Question, question_id)
+    if not q:
+        raise HTTPException(404, "Not found")
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(400, "Text required")
+    q.text = text
+    q.block = payload.block or None
+    q.formation = payload.formation or None
+    q.position = payload.position or 0
+    db.commit()
+    db.refresh(q)
+    return _question_to_out(q)
+
+
+@app.post("/api/questions/bulk", response_model=list[QuestionOut])
+def bulk_create_questions(payload: QuestionBulkIn, db: Session = Depends(get_db)):
+    if payload.replace_block:
+        blocks_to_clear = {q.block for q in payload.questions if q.block}
+        if blocks_to_clear:
+            db.query(Question).filter(Question.block.in_(blocks_to_clear)).delete(
+                synchronize_session=False
+            )
+    created: list[Question] = []
+    for spec in payload.questions:
+        text = spec.text.strip()
+        if not text:
+            continue
+        q = Question(
+            text=text,
+            block=(spec.block or None),
+            formation=(spec.formation or None),
+            position=spec.position or 0,
+        )
+        db.add(q)
+        created.append(q)
+    db.commit()
+    for q in created:
+        db.refresh(q)
+    return [_question_to_out(q) for q in created]
+
+
+@app.post("/api/questions/seed/czocha-day-1", response_model=list[QuestionOut])
+def seed_czocha_day_1(replace: bool = True, db: Session = Depends(get_db)):
+    """Load the Czocha Day 1 deck (Knights' Hall opening + privilege walk + four corners)."""
+    records = _czocha_day1_records()
+    if replace:
+        blocks = {r["block"] for r in records if r.get("block")}
+        if blocks:
+            db.query(Question).filter(Question.block.in_(blocks)).delete(
+                synchronize_session=False
+            )
+    created: list[Question] = []
+    for r in records:
+        q = Question(
+            text=r["text"],
+            block=r.get("block"),
+            formation=r.get("formation"),
+            position=r.get("position") or 0,
+        )
+        db.add(q)
+        created.append(q)
+    db.commit()
+    for q in created:
+        db.refresh(q)
+    return [_question_to_out(q) for q in created]
 
 
 @app.put("/api/questions/{question_id}/activate", response_model=QuestionOut)

@@ -516,52 +516,80 @@ async function loadQuestions() {
 function renderQuestions(qs) {
   clear(questionsListEl);
   if (!qs.length) {
-    questionsListEl.appendChild(el("div", { class: "muted" }, "No questions yet."));
+    questionsListEl.appendChild(el("div", { class: "muted" }, "No questions yet. Use the Czocha preset above, or add one manually."));
     return;
   }
-  const tbl = el("table", {});
-  tbl.appendChild(el("thead", {}, el("tr", {},
-    el("th", {}, "Active"),
-    el("th", {}, "Text"),
-    el("th", {}, "Created"),
-    el("th", {}, "Actions"),
-  )));
-  const tb = el("tbody", {});
+  // Group by block (preserve order from server).
+  const groups = new Map();
   for (const q of qs) {
-    tb.appendChild(el("tr", {},
-      el("td", {}, q.is_active ? el("span", { class: "status-pill ok" }, "active") : ""),
-      el("td", {}, q.text),
-      el("td", { class: "muted" }, fmtTime(q.created_at)),
-      el("td", {},
-        el("button", {
-          onclick: async () => { await api(`/api/questions/${q.id}/activate`, { method: "PUT" }); await loadQuestions(); }
-        }, "Activate"),
-        " ",
-        el("button", { onclick: () => showQuestionDetail(q.id) }, "Results"),
-        " ",
-        el("button", {
-          class: "danger",
-          onclick: async () => {
-            if (!confirm(`Delete "${q.text}"? All votes will be removed.`)) return;
-            await api(`/api/questions/${q.id}`, { method: "DELETE" });
-            questionDetailPanel.hidden = true;
-            await loadQuestions();
-          }
-        }, "Delete"),
-      ),
-    ));
+    const key = q.block || "(unblocked)";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(q);
   }
-  tbl.appendChild(tb);
-  questionsListEl.appendChild(tbl);
+  for (const [blockName, items] of groups) {
+    const wrap = el("div", { style: { marginBottom: "16px" } });
+    wrap.appendChild(el("div", {
+      style: { fontWeight: 600, padding: "6px 0", fontSize: "14px", color: "#cbd5e1" }
+    }, blockName, "  ", el("span", { class: "muted", style: { fontWeight: 400 } }, `(${items.length})`)));
+
+    const tbl = el("table", {});
+    tbl.appendChild(el("thead", {}, el("tr", {},
+      el("th", { style: { width: "60px" } }, ""),
+      el("th", { style: { width: "40px" } }, "#"),
+      el("th", {}, "Text"),
+      el("th", { style: { width: "110px" } }, "Formation"),
+      el("th", { style: { width: "240px" } }, "Actions"),
+    )));
+    const tb = el("tbody", {});
+    for (const q of items) {
+      tb.appendChild(el("tr", {},
+        el("td", {}, q.is_active ? el("span", { class: "status-pill ok" }, "active") : ""),
+        el("td", { class: "muted" }, q.position ? String(q.position) : ""),
+        el("td", {}, q.text),
+        el("td", {}, q.formation ? el("span", { class: "status-pill" }, q.formation) : ""),
+        el("td", {},
+          el("button", {
+            onclick: async () => { await api(`/api/questions/${q.id}/activate`, { method: "PUT" }); await loadQuestions(); }
+          }, "Activate"),
+          " ",
+          el("button", { onclick: () => showQuestionDetail(q.id) }, "Results"),
+          " ",
+          el("button", {
+            class: "danger",
+            onclick: async () => {
+              if (!confirm(`Delete "${q.text}"? All votes will be removed.`)) return;
+              await api(`/api/questions/${q.id}`, { method: "DELETE" });
+              questionDetailPanel.hidden = true;
+              await loadQuestions();
+            }
+          }, "×"),
+        ),
+      ));
+    }
+    tbl.appendChild(tb);
+    wrap.appendChild(tbl);
+    questionsListEl.appendChild(wrap);
+  }
 }
 
 document.getElementById("add-question-btn").addEventListener("click", async () => {
   const text = document.getElementById("question-text").value.trim();
+  const block = document.getElementById("question-block").value.trim();
+  const formation = document.getElementById("question-formation").value;
   if (!text) return;
   try {
-    await api("/api/questions", { method: "POST", body: { text } });
+    await api("/api/questions", { method: "POST", body: { text, block, formation } });
     document.getElementById("question-text").value = "";
     await loadQuestions();
+  } catch (e) { alert(e.message); }
+});
+
+document.getElementById("load-czocha-btn").addEventListener("click", async () => {
+  if (!confirm("Load the Czocha Day 1 deck? Existing rows in the same blocks will be replaced.")) return;
+  try {
+    const created = await api("/api/questions/seed/czocha-day-1?replace=true", { method: "POST", body: {} });
+    await loadQuestions();
+    alert(`Loaded ${created.length} questions.`);
   } catch (e) { alert(e.message); }
 });
 

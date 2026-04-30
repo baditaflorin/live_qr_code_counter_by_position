@@ -102,7 +102,24 @@
       <h3 style="margin-top:0;">Add question</h3>
       <div class="row">
         <input id="question-text" type="text" placeholder="Question text" style="flex: 1; min-width: 280px;" />
+        <input id="question-block" type="text" placeholder="Block (optional)" style="width: 220px;" />
+        <select id="question-formation">
+          <option value="">— formation —</option>
+          <option value="line">line</option>
+          <option value="spectrum">spectrum</option>
+          <option value="two_camps">two_camps</option>
+          <option value="circle">circle</option>
+          <option value="matrix_2x2">matrix_2x2</option>
+          <option value="privilege_walk">privilege_walk</option>
+        </select>
         <button id="add-question-btn" class="primary">Add</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">Presets</h3>
+      <div class="row">
+        <button id="load-czocha-btn" class="primary">Load Czocha Day 1 deck</button>
+        <span class="muted">Loads the full opening exercise: 6 question blocks + the 16-statement privilege walk + the four-corners matrix. Replaces existing rows in the same blocks.</span>
       </div>
     </div>
     <div class="panel">

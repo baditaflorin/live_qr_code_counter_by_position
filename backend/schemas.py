@@ -55,13 +55,24 @@ class ZoneOut(BaseModel):
 
 class QuestionIn(BaseModel):
     text: str
+    block: Optional[str] = None
+    formation: Optional[str] = None
+    position: int = 0
 
 
 class QuestionOut(BaseModel):
     id: int
     text: str
     is_active: bool
+    block: Optional[str] = None
+    formation: Optional[str] = None
+    position: int = 0
     created_at: datetime
+
+
+class QuestionBulkIn(BaseModel):
+    questions: list[QuestionIn]
+    replace_block: bool = False  # if true, delete existing rows in same block first
 
 
 class VoteOut(BaseModel):
