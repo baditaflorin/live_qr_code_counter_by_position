@@ -262,6 +262,22 @@ const zoneNameInput = document.getElementById("zone-name");
 const zoneLabelInput = document.getElementById("zone-label");
 const zoneColorInput = document.getElementById("zone-color");
 const zoneFormationSel = document.getElementById("zone-formation");
+const zoneEditFormationEl = document.getElementById("zone-edit-formation");
+
+function currentFormationFilter() { return zoneEditFormationEl.value; }
+function visibleZones() {
+  const f = currentFormationFilter();
+  if (!f) return zoneZonesCache;
+  return zoneZonesCache.filter((z) => (z.formation || "") === f);
+}
+
+zoneEditFormationEl.addEventListener("change", () => {
+  // Make the "draw a new zone" formation match what we're filtering to —
+  // so anything you draw now defaults into the same formation you're editing.
+  zoneFormationSel.value = zoneEditFormationEl.value;
+  redrawZoneCanvas();
+  renderZonesList();
+});
 const zoneUndoBtn = document.getElementById("zone-undo");
 const zoneClearBtn = document.getElementById("zone-clear");
 const zoneSaveBtn = document.getElementById("zone-save");
@@ -352,8 +368,8 @@ function redrawZoneCanvas() {
   const h = zDraw.height;
   ctx.clearRect(0, 0, w, h);
 
-  // existing zones (faint)
-  for (const z of zoneZonesCache) {
+  // existing zones (faint) — filtered to whichever formation we're editing
+  for (const z of visibleZones()) {
     if (!z.polygon || z.polygon.length < 3) continue;
     ctx.beginPath();
     z.polygon.forEach(([x, y], i) => {
@@ -464,8 +480,13 @@ function renderZonesList() {
     zonesListEl.appendChild(el("div", { class: "muted" }, "No zones yet — click 'Load default templates' above for a working set."));
     return;
   }
+  const visible = visibleZones();
+  if (!visible.length) {
+    zonesListEl.appendChild(el("div", { class: "muted" }, `No zones for formation "${currentFormationFilter()}". Switch the filter to "all" or load defaults.`));
+    return;
+  }
   const groups = new Map();
-  for (const z of zoneZonesCache) {
+  for (const z of visible) {
     const k = z.formation || "(unassigned)";
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(z);
@@ -524,6 +545,8 @@ zStartBtn.addEventListener("click", startZCam);
 zStopBtn.addEventListener("click", stopZCam);
 zSnapshotBtn.addEventListener("click", takeBgSnapshot);
 listZCameras();
+// Keep the "draw a new zone" formation picker in sync with the editor filter on first paint.
+zoneFormationSel.value = zoneEditFormationEl.value;
 
 // ---------- questions ----------
 const questionsListEl = document.getElementById("questions-list");

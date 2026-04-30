@@ -65,6 +65,23 @@
   <!-- ZONES -->
   <section id="tab-zones" hidden>
     <div class="panel">
+      <div class="row">
+        <label style="font-weight:600;">Working on formation:
+          <select id="zone-edit-formation" style="margin-left:6px;">
+            <option value="line" selected>line</option>
+            <option value="spectrum">spectrum</option>
+            <option value="two_camps">two_camps</option>
+            <option value="circle">circle</option>
+            <option value="matrix_2x2">matrix_2x2</option>
+            <option value="privilege_walk">privilege_walk</option>
+            <option value="">— all (advanced) —</option>
+          </select>
+        </label>
+        <span class="spacer"></span>
+        <span class="muted">Filters the canvas, list, and the default formation for new zones.</span>
+      </div>
+    </div>
+    <div class="panel">
       <h3 style="margin-top:0;">Camera (for drawing zones)</h3>
       <div class="row">
         <label>Camera: <select id="z-camera-select"></select></label>
