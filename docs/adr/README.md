@@ -137,6 +137,22 @@ visible group artefact. *Activation, not articulation.*
 | [0066](0066-idea-drop-and-upvote.md)           | Idea drop + upvote — generate, balloon, vote, adopt        | 0067       |
 | [0067](0067-activation-kit-budget.md)          | Activation kit budget — how the 96 IDs get spent           | 0042 (replacement allocation) |
 
+## Badge as art — the marker doesn't have to *look* like a marker
+
+The marker has to *detect*; everything around it is design surface.
+ADRs 0068–0072 make the participant kit feel like wearable design instead
+of a tracking tag clipped to a chest. Each ADR adds one dimension of
+design freedom — composition, cell shape, color, per-person uniqueness,
+material — without breaking detection.
+
+| #    | Decision                                                              | Depends on |
+| ---- | --------------------------------------------------------------------- | ---------- |
+| [0068](0068-badge-as-composition.md)           | Badge as designed composition (frame + sigil + name + marker) | 0030       |
+| [0069](0069-stylized-cell-ornaments.md)        | Stylised cell ornaments (squares → hexagons / leaves / glyphs)| 0030, 0068 |
+| [0070](0070-color-palette-per-workshop.md)     | Color palette per workshop (deep navy on parchment, etc.)     | 0068       |
+| [0071](0071-generative-art-frame.md)           | Generative art frame seeded by participant ID                 | 0068       |
+| [0072](0072-material-kit-fabric-wood-metal.md) | Material kit — fabric patches, wooden discs, lapel pins       | 0049, 0056 |
+
 ## Limits & degradation — what the system actually does at the edges
 
 The math behind "how many people, how many cameras, how fast" — and what the
