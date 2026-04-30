@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Live ArUco zone counter</title>
+<meta name="description" content="Count people per zone in a camera view in real time using ArUco fiducial markers. Self-hosted, dockerized, with admin panel and printable marker sheets." />
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #22c55e;
+    --accent-2: #38bdf8;
+    --border: #475569;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+  }
+  a { color: var(--accent-2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header {
+    padding: 64px 24px 40px;
+    background: linear-gradient(180deg, #0b1220 0%, #0f172a 100%);
+    border-bottom: 1px solid var(--border);
+    text-align: center;
+  }
+  header h1 { font-size: 38px; margin: 0 0 12px; letter-spacing: -0.5px; }
+  header p.tagline { font-size: 18px; color: var(--muted); max-width: 640px; margin: 0 auto 24px; }
+  .badges { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 24px; }
+  .badge {
+    background: var(--panel-2); color: var(--text);
+    padding: 4px 10px; border-radius: 12px; font-size: 12px;
+    border: 1px solid var(--border);
+  }
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .cta a {
+    display: inline-block; padding: 10px 18px; border-radius: 6px;
+    background: var(--accent); color: #052e1a; font-weight: 600;
+    border: 1px solid var(--accent);
+  }
+  .cta a.secondary { background: transparent; color: var(--text); border-color: var(--border); }
+  .cta a:hover { text-decoration: none; filter: brightness(1.1); }
+
+  main { max-width: 880px; margin: 0 auto; padding: 40px 24px 80px; }
+  section { margin-bottom: 40px; }
+  h2 { font-size: 24px; margin: 0 0 16px; }
+  h3 { font-size: 18px; margin: 24px 0 8px; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 20px;
+  }
+  .card h3 { margin-top: 0; }
+  .card p { color: var(--muted); margin: 0; }
+
+  pre {
+    background: #0a1124; border: 1px solid var(--border);
+    padding: 16px; border-radius: 8px; overflow-x: auto;
+    font-size: 14px;
+  }
+  code { font-family: ui-monospace, SF Mono, Menlo, monospace; }
+  p code, li code {
+    background: #0a1124; padding: 2px 6px; border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+
+  ol, ul { padding-left: 22px; }
+  li { margin-bottom: 6px; }
+
+  .diagram {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 20px; font-family: ui-monospace, SF Mono, Menlo, monospace;
+    font-size: 13px; white-space: pre; overflow-x: auto; line-height: 1.4;
+  }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Live ArUco zone counter</h1>
+  <p class="tagline">Count how many people are in each zone of a camera view in real time, by detecting fiducial markers worn on heads. Self-hosted. Open source.</p>
+  <div class="badges">
+    <span class="badge">FastAPI</span>
+    <span class="badge">OpenCV ArUco</span>
+    <span class="badge">WebSocket</span>
+    <span class="badge">SQLite</span>
+    <span class="badge">Docker</span>
+  </div>
+  <div class="cta">
+    <a href="https://github.com/baditaflorin/live_qr_code_counter_by_position">View on GitHub</a>
+    <a href="https://github.com/baditaflorin/live_qr_code_counter_by_position#quick-start" class="secondary">Quick start</a>
+    <a href="https://github.com/baditaflorin/live_qr_code_counter_by_position/blob/master/README.md" class="secondary">Read the docs</a>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <h2>What it does</h2>
+  <p>You're standing on the second floor of a hall. People downstairs walk into one of four zones marked on the floor — &ldquo;Yes&rdquo;, &ldquo;No&rdquo;, &ldquo;Maybe&rdquo;, &ldquo;I don&rsquo;t know&rdquo;. Each person wears a small printed marker on their head. The system sees who&rsquo;s in which zone, in real time, and lets you snapshot per-person answers across many questions.</p>
+  <p>It works because <strong>ArUco markers</strong> are fiducial markers designed for exactly this: small black-and-white squares detected reliably from far away with dozens in frame at once. Each marker carries a small integer ID linked to a person in the database.</p>
+</section>
+
+<section>
+  <h2>Features</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Real-time detection</h3>
+      <p>Browser captures webcam, streams JPEG frames over WebSocket. OpenCV detects all visible markers per frame and assigns each to a zone polygon.</p>
+    </div>
+    <div class="card">
+      <h3>Admin panel</h3>
+      <p>People, markers, zones, questions — full CRUD. Zones are drawn directly on the live camera feed by clicking polygon vertices.</p>
+    </div>
+    <div class="card">
+      <h3>Printable PDFs</h3>
+      <p>3×3 markers per A4 page at 200 DPI. Each marker is captioned with its ID and the assigned person&rsquo;s name. White quiet-zone padding for reliable detection.</p>
+    </div>
+    <div class="card">
+      <h3>Per-question snapshots</h3>
+      <p>Mark a question active, hit &ldquo;Record snapshot&rdquo;, and the system saves where each detected marker was at that moment. Browse history, see per-zone counts.</p>
+    </div>
+    <div class="card">
+      <h3>Zero cloud dependencies</h3>
+      <p>Everything runs in one Docker container. SQLite for storage. No accounts, no API keys.</p>
+    </div>
+    <div class="card">
+      <h3>Robust at distance</h3>
+      <p>Default <code>DICT_4X4_100</code> dictionary keeps the inner pattern simple, optimizing for detection from across a hall instead of marker count.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Architecture</h2>
+  <div class="diagram">┌──────────────┐      WebSocket (JPEG bytes)       ┌──────────────────────┐
+│  Browser     │  ──────────────────────────────▶  │  FastAPI in Docker   │
+│  (webcam)    │  ◀─── JSON: detections + zones ── │  OpenCV ArUco        │
+│  draws over- │                                   │  SQLite + PDF gen    │
+│  lay locally │                                   └──────────────────────┘
+└──────────────┘</div>
+  <p>Docker on macOS can&rsquo;t access the host webcam directly, so the browser captures the camera and ships compressed frames to the dockerized backend. Detection runs server-side for consistency; overlay drawing happens client-side. Bandwidth is ~300–500 KB/s at 10 fps, 1280×720.</p>
+</section>
+
+<section>
+  <h2>Quick start</h2>
+  <pre><code>git clone https://github.com/baditaflorin/live_qr_code_counter_by_position.git
+cd live_qr_code_counter_by_position
+docker compose up --build</code></pre>
+  <p>Open <code>http://localhost:8000</code> for the live counter and <code>http://localhost:8000/admin</code> for the admin panel. Grant camera permission on the first <em>Start</em> click. Data persists in <code>./data/app.db</code>.</p>
+</section>
+
+<section>
+  <h2>Workflow</h2>
+  <ol>
+    <li><strong>Admin → People</strong>: add a person, choose how many markers to assign.</li>
+    <li><strong>Admin → Markers</strong>: download the printable PDF, print, cut, hand them out.</li>
+    <li><strong>Admin → Zones</strong>: start the camera, click polygon vertices on the video, name the zone (e.g. &ldquo;Yes&rdquo;), pick a color, save.</li>
+    <li><strong>Admin → Questions</strong>: create a question, mark it active.</li>
+    <li><strong>Live view</strong>: hit Start, watch live counts update per zone, hit <em>Record snapshot</em> to save the current per-person answer.</li>
+    <li><strong>Question results</strong>: review history, see per-zone breakdown, see which person was in which zone at each snapshot.</li>
+  </ol>
+</section>
+
+<section>
+  <h2>Why ArUco instead of QR codes</h2>
+  <p>QR codes carry arbitrary text but are fragile at distance and angle, and standard detectors struggle with multiple QRs per frame. ArUco markers are designed exactly for fiducial detection at distance: faster, more robust, and handle dozens-per-frame trivially. Since each person only needs an integer ID (not arbitrary data), QR is overkill.</p>
+</section>
+
+<section>
+  <h2>Tips for overhead cameras</h2>
+  <ul>
+    <li><strong>Marker size</strong>: rule of thumb, the printed marker should be ≥1/40th of camera frame height. From a 2nd-floor hall view, that&rsquo;s typically A5 (≈15×15 cm) for a 1080p camera.</li>
+    <li><strong>Mount stiff</strong>: cardboard backing keeps the marker flat. Curling kills detection.</li>
+    <li><strong>Lighting</strong>: diffuse light beats harsh single-point. Avoid shadows across the marker.</li>
+    <li><strong>Resolution vs. FPS</strong>: 1280×720 @ 10 fps is the sweet spot for most rooms.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>
+  <a href="https://github.com/baditaflorin/live_qr_code_counter_by_position">Source on GitHub</a> · MIT-style usage · Built with FastAPI + OpenCV
+</footer>
+
+</body>
+</html>
