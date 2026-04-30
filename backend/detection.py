@@ -36,6 +36,11 @@ def get_dictionary():
     return _dictionary
 
 
+def dictionary_size() -> int:
+    """Number of unique markers in the active dictionary."""
+    return int(_dictionary.bytesList.shape[0])
+
+
 @dataclass
 class Detection:
     aruco_id: int

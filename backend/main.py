@@ -87,6 +87,7 @@ def _next_aruco_id(db: Session) -> int:
 def system_info():
     return {
         "dictionary": detection.get_dictionary_name(),
+        "dictionary_size": detection.dictionary_size(),
         "data_dir": os.environ.get("DATA_DIR", "./data"),
     }
 
@@ -149,6 +150,16 @@ def create_marker_batch(payload: MarkerCreateBatch, db: Session = Depends(get_db
     if payload.person_id is not None:
         if not db.get(Person, payload.person_id):
             raise HTTPException(400, "Unknown person_id")
+    dict_size = detection.dictionary_size()
+    next_id = _next_aruco_id(db)
+    if next_id + payload.count > dict_size:
+        remaining = max(0, dict_size - next_id)
+        raise HTTPException(
+            400,
+            f"Dictionary {detection.get_dictionary_name()} only holds {dict_size} unique markers "
+            f"(next id {next_id}, {remaining} remaining). Switch ARUCO_DICTIONARY in docker-compose.yml "
+            f"to a larger one (e.g. DICT_4X4_250) and rebuild.",
+        )
     created: list[Marker] = []
     for _ in range(payload.count):
         new_id = _next_aruco_id(db)
@@ -191,6 +202,12 @@ def delete_marker(aruco_id: int, db: Session = Depends(get_db)):
 def marker_image(aruco_id: int, db: Session = Depends(get_db)):
     if not db.get(Marker, aruco_id):
         raise HTTPException(404, "Marker not found")
+    if aruco_id >= detection.dictionary_size():
+        raise HTTPException(
+            409,
+            f"Marker id {aruco_id} is outside dictionary {detection.get_dictionary_name()}. "
+            f"Delete it or switch dictionaries.",
+        )
     png = marker_gen.render_marker_png(aruco_id)
     return Response(content=png, media_type="image/png")
 

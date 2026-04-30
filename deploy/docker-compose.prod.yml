@@ -1,0 +1,19 @@
+# Production compose for the app VM (e.g. 10.10.10.20).
+# Pulls the prebuilt image from GHCR — no build context needed on the VM.
+#
+# Usage:
+#   sudo docker compose -f docker-compose.prod.yml pull
+#   sudo docker compose -f docker-compose.prod.yml up -d
+#
+services:
+  app:
+    image: ghcr.io/baditaflorin/live_qr_code_counter_by_position:latest
+    container_name: aruco-counter
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      DATA_DIR: /data
+      ARUCO_DICTIONARY: DICT_4X4_250
