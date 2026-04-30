@@ -226,7 +226,7 @@ def marker_image(aruco_id: int, db: Session = Depends(get_db)):
 def badge_styles():
     """Catalog of available badge templates / palettes / cell ornaments / generative frames."""
     return {
-        "templates": ["default", "czocha", "craft"],
+        "templates": list(badge_gen.TEMPLATE_LAYOUTS.keys()),
         "palettes": [
             {
                 "name": p.name,
