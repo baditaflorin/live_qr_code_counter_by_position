@@ -73,6 +73,23 @@ the kit is what gives them a voice the system can hear.
 | [0029](0029-promise-cards.md)                  | Promise cards — the closing commitment ritual           | 0017, 0020 |
 | [0030](0030-custom-card-decks.md)              | Custom decks per workshop — the kit as instrument       | 0010, 0021–0029 |
 
+### Grammar layer — the kit becomes a language
+
+ADRs 0023–0029 give the kit *atoms* (one card → one meaning).
+ADRs 0042–0047 give it *primitives* that compose: modifier + subject +
+quantity + connector. Together they let participants build sentences
+from a small vocabulary, instead of needing a dedicated card for every
+shade of meaning.
+
+| #    | Decision                                                              | Depends on |
+| ---- | --------------------------------------------------------------------- | ---------- |
+| [0042](0042-card-budget-extension.md)          | Extend reserved range 32 → 96 IDs (138–233)              | 0011, 0021 (supersedes id-count portion) |
+| [0043](0043-modifier-cards.md)                 | Modifier cards: STRONGLY / NOT / MAYBE / AS-IF / …      | 0042, 0047 |
+| [0044](0044-pronoun-cards.md)                  | Pronoun cards: I / YOU / US / THEM / ANYONE / …         | 0042, 0047 |
+| [0045](0045-quantity-cards.md)                 | Quantity cards: 0 / 1 / 2 / 3 / 5 / 10 / ALL / NONE     | 0042, 0047 |
+| [0046](0046-connector-cards.md)                | Connector cards: AND / OR / BUT / BECAUSE / IF / …      | 0042, 0047 |
+| [0047](0047-card-grammar.md)                   | Six-slot grammar — how primitives compose into events    | 0042–0046  |
+
 ## Limits & degradation — what the system actually does at the edges
 
 The math behind "how many people, how many cameras, how fast" — and what the
