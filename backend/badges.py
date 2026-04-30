@@ -194,6 +194,12 @@ def render_styled_marker(
     for r in range(n):
         for c in range(n):
             filled = grid[r, c] == 0  # 0 means filled in our grid convention
+            # ArUco markers have a 1-cell solid border around the inner data
+            # cells. The detector finds the marker by that square contour, so
+            # the border MUST stay rendered as solid squares regardless of the
+            # ornament style. Only the inner data cells get the ornament.
+            on_border = (r == 0 or r == n - 1 or c == 0 or c == n - 1)
+            style_for_cell = "square" if on_border else cell_style
             _draw_cell(
                 draw,
                 quiet_px + c * cell_px,
@@ -202,7 +208,7 @@ def render_styled_marker(
                 filled,
                 palette.ink,
                 palette.paper,
-                cell_style,
+                style_for_cell,
             )
     return img
 
