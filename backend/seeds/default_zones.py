@@ -22,28 +22,39 @@ def _octagon(cx: float, cy: float, rx: float, ry: float) -> list[list[float]]:
 
 
 # Each entry: (name, label, color, polygon)
+#
+# Labels are deliberately POSITIONAL, not semantic. Different line questions
+# have different ends — "fully agree ↔ fully disagree" for one, "least sleep
+# ↔ most sleep" for another, "barely here ↔ fully arrived" for a third — so
+# we name zones by where they are in the room, and the facilitator reads the
+# question text to tell people what each end means. Same convention the
+# Czocha slide deck uses ("this side / that side").
 LINE = [
-    ("line-a", "Strongly agree",     "#22c55e", _rect(0.00, 0.05, 0.18, 0.95)),
-    ("line-b", "Agree",              "#84cc16", _rect(0.20, 0.05, 0.38, 0.95)),
-    ("line-c", "Middle",             "#eab308", _rect(0.40, 0.05, 0.60, 0.95)),
-    ("line-d", "Disagree",           "#f97316", _rect(0.62, 0.05, 0.80, 0.95)),
-    ("line-e", "Strongly disagree",  "#ef4444", _rect(0.82, 0.05, 1.00, 0.95)),
+    ("line-a", "Far left",  "#22c55e", _rect(0.00, 0.05, 0.18, 0.95)),
+    ("line-b", "Mid-left",  "#84cc16", _rect(0.20, 0.05, 0.38, 0.95)),
+    ("line-c", "Centre",    "#eab308", _rect(0.40, 0.05, 0.60, 0.95)),
+    ("line-d", "Mid-right", "#f97316", _rect(0.62, 0.05, 0.80, 0.95)),
+    ("line-e", "Far right", "#ef4444", _rect(0.82, 0.05, 1.00, 0.95)),
 ]
 
-# Same polygons as LINE — spectrum is just a five-step line. The frontend
-# treats them identically; we keep them as a separate set so the labels can
-# read "first option" / "second option" which fits Block 2 better.
+# Spectrum is identical geometry to LINE — kept as its own template only
+# because some questions ("I plan everything · I follow what unfolds") are
+# better described as a five-step spectrum than as agree/disagree, and
+# operators may want to relabel one without affecting the other.
 SPECTRUM = [
-    ("spectrum-1", "First option (very)",  "#22c55e", _rect(0.00, 0.05, 0.18, 0.95)),
-    ("spectrum-2", "First option",         "#84cc16", _rect(0.20, 0.05, 0.38, 0.95)),
-    ("spectrum-3", "In-between",           "#eab308", _rect(0.40, 0.05, 0.60, 0.95)),
-    ("spectrum-4", "Second option",        "#f97316", _rect(0.62, 0.05, 0.80, 0.95)),
-    ("spectrum-5", "Second option (very)", "#ef4444", _rect(0.82, 0.05, 1.00, 0.95)),
+    ("spectrum-1", "Far left",  "#22c55e", _rect(0.00, 0.05, 0.18, 0.95)),
+    ("spectrum-2", "Mid-left",  "#84cc16", _rect(0.20, 0.05, 0.38, 0.95)),
+    ("spectrum-3", "Centre",    "#eab308", _rect(0.40, 0.05, 0.60, 0.95)),
+    ("spectrum-4", "Mid-right", "#f97316", _rect(0.62, 0.05, 0.80, 0.95)),
+    ("spectrum-5", "Far right", "#ef4444", _rect(0.82, 0.05, 1.00, 0.95)),
 ]
 
+# Two camps — also positional. Most Block-4 questions read as yes/no, but
+# some ("I trust easily · I trust slowly") are first-option / second-option.
+# Operator names the camps after reading the statement.
 TWO_CAMPS = [
-    ("camp-yes", "Yes · True for me",     "#22c55e", _rect(0.00, 0.05, 0.48, 0.95)),
-    ("camp-no",  "No · Not true for me",  "#ef4444", _rect(0.52, 0.05, 1.00, 0.95)),
+    ("camp-left",  "Left side",  "#22c55e", _rect(0.00, 0.05, 0.48, 0.95)),
+    ("camp-right", "Right side", "#ef4444", _rect(0.52, 0.05, 1.00, 0.95)),
 ]
 
 MATRIX_2X2 = [
