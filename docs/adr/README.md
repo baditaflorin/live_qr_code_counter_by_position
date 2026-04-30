@@ -73,6 +73,19 @@ the kit is what gives them a voice the system can hear.
 | [0029](0029-promise-cards.md)                  | Promise cards — the closing commitment ritual           | 0017, 0020 |
 | [0030](0030-custom-card-decks.md)              | Custom decks per workshop — the kit as instrument       | 0010, 0021–0029 |
 
+## Limits & degradation — what the system actually does at the edges
+
+The math behind "how many people, how many cameras, how fast" — and what the
+system does when reality exceeds the configured envelope.
+
+| #    | Decision                                                              | Depends on |
+| ---- | --------------------------------------------------------------------- | ---------- |
+| [0031](0031-resolution-marker-sizing.md)       | Resolution, marker size, detectable count per camera     | 0003, 0012 |
+| [0032](0032-frame-rate-budget.md)              | Frame-rate budget by use case (FrameRouter)              | —          |
+| [0033](0033-bandwidth-and-jpeg-quality.md)     | Bandwidth budget + adaptive JPEG quality                 | —          |
+| [0034](0034-multi-camera-coverage-planning.md) | Multi-camera coverage planner with blind-spot diagram    | 0003, 0005, 0031 |
+| [0035](0035-system-limits-and-degradation.md)  | Document the envelope + named degradation strategies     | every other ADR |
+
 ## Suggested implementation order
 
 Smallest blast radius first, biggest leverage last:
