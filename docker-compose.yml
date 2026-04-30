@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    container_name: aruco-counter
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    environment:
+      DATA_DIR: /data
+      ARUCO_DICTIONARY: DICT_4X4_100

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Admin</title>
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<header class="app-header">
+  <h1>Admin</h1>
+  <nav>
+    <a href="/">Live</a>
+    <a href="/admin" class="active">Admin</a>
+  </nav>
+</header>
+<main>
+  <div class="tabs">
+    <button data-tab="people" class="active">People</button>
+    <button data-tab="markers">Markers</button>
+    <button data-tab="zones">Zones</button>
+    <button data-tab="questions">Questions</button>
+  </div>
+
+  <!-- PEOPLE -->
+  <section id="tab-people">
+    <div class="panel">
+      <h3 style="margin-top:0;">Add person</h3>
+      <div class="row">
+        <input id="person-name" type="text" placeholder="Full name" />
+        <input id="person-notes" type="text" placeholder="Notes (optional)" style="flex:1; min-width: 200px;" />
+        <input id="person-with-markers" type="number" min="0" max="20" value="1" style="width:80px;" title="how many markers to assign at creation" />
+        <button id="add-person-btn" class="primary">Add person + markers</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">People</h3>
+      <div id="people-list"></div>
+    </div>
+  </section>
+
+  <!-- MARKERS -->
+  <section id="tab-markers" hidden>
+    <div class="panel">
+      <h3 style="margin-top:0;">Generate unassigned markers</h3>
+      <div class="row">
+        <label>Count: <input id="batch-count" type="number" min="1" max="100" value="10" style="width:80px;" /></label>
+        <button id="batch-create-btn" class="primary">Create batch</button>
+        <span class="spacer"></span>
+        <span class="muted" id="dict-info"></span>
+      </div>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">All markers</h3>
+      <div class="row" style="margin-bottom: 12px;">
+        <button id="download-all-pdf" class="primary">Download all as PDF</button>
+        <button id="download-selected-pdf">Download selected as PDF</button>
+        <span class="spacer"></span>
+        <input id="marker-filter" type="text" placeholder="Filter by id or person..." style="width: 240px;" />
+      </div>
+      <div id="markers-grid" class="markers-grid"></div>
+    </div>
+  </section>
+
+  <!-- ZONES -->
+  <section id="tab-zones" hidden>
+    <div class="panel">
+      <h3 style="margin-top:0;">Camera (for drawing zones)</h3>
+      <div class="row">
+        <label>Camera: <select id="z-camera-select"></select></label>
+        <button id="z-start-cam" class="primary">Start camera</button>
+        <button id="z-snapshot">Use current frame as background</button>
+        <button id="z-stop-cam">Stop camera</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">Draw a new zone</h3>
+      <div class="row" style="margin-bottom: 8px;">
+        <input id="zone-name" type="text" placeholder="Internal name (e.g. left-area)" />
+        <input id="zone-label" type="text" placeholder="Display label (e.g. Yes)" />
+        <input id="zone-color" type="color" value="#22c55e" />
+        <button id="zone-undo">Undo point</button>
+        <button id="zone-clear">Clear</button>
+        <button id="zone-save" class="primary">Save zone</button>
+        <span class="muted">Click on the video to add polygon points; need at least 3.</span>
+      </div>
+      <div class="zone-canvas-wrap" id="zone-stage">
+        <video id="z-video" autoplay playsinline muted></video>
+        <img id="z-bg" style="display:none;" />
+        <canvas id="z-draw" class="draw"></canvas>
+      </div>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">Zones</h3>
+      <div id="zones-list"></div>
+    </div>
+  </section>
+
+  <!-- QUESTIONS -->
+  <section id="tab-questions" hidden>
+    <div class="panel">
+      <h3 style="margin-top:0;">Add question</h3>
+      <div class="row">
+        <input id="question-text" type="text" placeholder="Question text" style="flex: 1; min-width: 280px;" />
+        <button id="add-question-btn" class="primary">Add</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0;">Questions</h3>
+      <div id="questions-list"></div>
+    </div>
+    <div class="panel" id="question-detail" hidden>
+      <h3 style="margin-top:0;">Detail</h3>
+      <div id="question-detail-body"></div>
+    </div>
+  </section>
+</main>
+<script type="module" src="/static/admin.js"></script>
+</body>
+</html>

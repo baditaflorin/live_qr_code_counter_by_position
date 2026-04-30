@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Live count</title>
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<header class="app-header">
+  <h1>Live ArUco counter</h1>
+  <nav>
+    <a href="/" class="active">Live</a>
+    <a href="/admin">Admin</a>
+  </nav>
+</header>
+<main>
+  <div class="panel">
+    <div class="row">
+      <label>Camera:
+        <select id="camera-select"></select>
+      </label>
+      <label>Resolution:
+        <select id="resolution">
+          <option value="640x480">640×480</option>
+          <option value="1280x720" selected>1280×720</option>
+          <option value="1920x1080">1920×1080</option>
+        </select>
+      </label>
+      <label>FPS:
+        <select id="fps">
+          <option>5</option>
+          <option selected>10</option>
+          <option>15</option>
+          <option>20</option>
+        </select>
+      </label>
+      <button id="start-btn" class="primary">Start</button>
+      <button id="stop-btn" disabled>Stop</button>
+      <span class="spacer"></span>
+      <span id="status" class="status-pill">idle</span>
+      <span id="fps-actual" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="live-wrap">
+    <div>
+      <div class="video-wrap" id="video-wrap">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay" class="overlay"></canvas>
+      </div>
+      <div class="panel" style="margin-top:12px;">
+        <div class="row">
+          <label>Active question:
+            <select id="active-question"><option value="">— none —</option></select>
+          </label>
+          <button id="snapshot-btn">Record snapshot</button>
+          <span class="spacer"></span>
+          <span id="last-snapshot" class="muted"></span>
+        </div>
+      </div>
+    </div>
+    <aside>
+      <div class="panel">
+        <h3 style="margin-top:0;">Counts</h3>
+        <div id="zone-counts" class="zone-counts"></div>
+      </div>
+      <div class="panel">
+        <h3 style="margin-top:0;">Detected</h3>
+        <div id="detected-list" class="muted">No markers in view.</div>
+      </div>
+    </aside>
+  </div>
+</main>
+<script type="module" src="/static/live.js"></script>
+</body>
+</html>
