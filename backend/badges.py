@@ -551,28 +551,30 @@ def _motif_botanical_vines(canvas: Image.Image, opts: BadgeOptions, palette: Pal
     cy_m = (my0 + my1) / 2
     rng = _seeded_rng(opts.badge_w * 7919 + opts.badge_h, "vines")
 
-    # 1. Wreath ringing the marker — leaves placed along a circle around it.
-    wreath_r = max(mx1 - mx0, my1 - my0) * 0.78
+    # 1. Wreath ringing the marker — placed well outside the quiet zone.
+    qx0, qy0, qx1, qy1 = _safe_quiet_box(marker_box, pad=20)
+    wreath_r = max(mx1 - mx0, my1 - my0) * 0.95
     n_leaves = 28
     for i in range(n_leaves):
         angle = -math.pi / 2 + 2 * math.pi * i / n_leaves
-        # Skip the top arc so the marker has a "view" upward (looks more like a wreath
-        # than a closed circle).
+        # Skip the top arc so the marker has a "view" upward.
         if -math.pi * 0.85 < angle < -math.pi * 0.15:
             continue
         lx = cx_m + wreath_r * math.cos(angle)
         ly = cy_m + wreath_r * math.sin(angle)
-        # Tangent-aligned leaf.
         tilt_deg = -math.degrees(angle) - 90 + rng.uniform(-15, 15)
         leaf_size = int(rng.uniform(38, 48))
         leaf = Image.new("RGBA", (leaf_size, int(leaf_size * 0.42)), (0, 0, 0, 0))
         ld = ImageDraw.Draw(leaf)
         ld.ellipse([(0, 0), (leaf_size - 1, int(leaf_size * 0.42) - 1)],
                    fill=palette.accent + (255,))
-        # Simple leaf vein.
         ld.line([(3, leaf_size * 0.21), (leaf_size - 3, leaf_size * 0.21)],
                 fill=palette.ink + (255,), width=1)
         leaf = leaf.rotate(tilt_deg, expand=True, resample=Image.BICUBIC)
+        leaf_cx, leaf_cy = int(lx), int(ly)
+        # Skip leaves that would overlap the quiet zone.
+        if qx0 <= leaf_cx <= qx1 and qy0 <= leaf_cy <= qy1:
+            continue
         canvas.paste(leaf, (int(lx - leaf.width / 2), int(ly - leaf.height / 2)), leaf)
 
     # 2. Long vines climbing from the two bottom corners with multiple leaves.
