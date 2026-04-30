@@ -1,0 +1,18 @@
+# Production compose for the dockerhost VM (10.10.10.20).
+# Builds from source on the VM — no registry needed.
+# Run from /opt/live_qr_wemeshup_com/ with:
+#   docker compose -f docker-compose.prod.yml up --build -d
+#
+services:
+  app:
+    build: .
+    container_name: live-qr-wemeshup
+    restart: unless-stopped
+    ports:
+      # Bind to all interfaces so the nginx VM (10.10.10.10) can reach 18050.
+      - "0.0.0.0:18050:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      DATA_DIR: /data
+      ARUCO_DICTIONARY: DICT_4X4_250
