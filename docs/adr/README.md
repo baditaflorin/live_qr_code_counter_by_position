@@ -18,6 +18,9 @@ One decision per file, status `Proposed` until acted on. Each ADR is self-contai
 | [0003](0003-floor-homography.md)               | Per-camera floor homography for real-meter proximity    | —          |
 | [0004](0004-marker-tracker.md)                 | Stateful marker tracker with temporal smoothing         | —          |
 | [0005](0005-multi-camera-fusion.md)            | Multi-camera fusion via floor-plane merge               | 0003, 0004 |
+| [0048](0048-aruco-pose-estimation.md)          | Real-time 6-DOF pose estimation per marker              | 0003, 0012 |
+| [0049](0049-multi-placement-marker-strategy.md)| Multi-placement marker kit (hat + chest + back)         | 0048       |
+| [0050](0050-3d-scene-reconstruction.md)        | 3D scene reconstruction by fusing pose across cameras   | 0005, 0048, 0049 |
 
 ## Operator UX & workflow
 
