@@ -143,8 +143,10 @@ def _draw_cell(draw: ImageDraw.ImageDraw, x0: float, y0: float, size: float,
         return
 
     if style == "six_star":
-        outer = r
-        inner = r * 0.45
+        # Chubbier star — outer reaches to cell edge, inner is 0.7× outer so the
+        # concave dips are shallow. Detector's center-sample reads as filled.
+        outer = size * 0.5
+        inner = outer * 0.7
         pts = []
         for i in range(12):
             radius = outer if i % 2 == 0 else inner
@@ -154,19 +156,36 @@ def _draw_cell(draw: ImageDraw.ImageDraw, x0: float, y0: float, size: float,
         return
 
     if style == "leaf":
-        # Almond/leaf shape: two arcs.
-        draw.chord([(cx - r, cy - r), (cx + r, cy + r)], 30, 150, fill=color)
-        draw.chord([(cx - r, cy - r), (cx + r, cy + r)], 210, 330, fill=color)
+        # Pointed oval — fat in the middle, pointed top + bottom. Fills more
+        # cell area than the two-arc almond so the cell-center samples filled.
+        rx = size * 0.40
+        ry = size * 0.50
+        # Build 16-point oval with pointed ends.
+        pts = []
+        for i in range(16):
+            a = -math.pi / 2 + 2 * math.pi * i / 16
+            # Stretch endpoints to make the top/bottom pointed.
+            scale = 1.0 + 0.15 * abs(math.cos(a))
+            pts.append((cx + rx * math.cos(a) * scale * 0.85,
+                        cy + ry * math.sin(a) * scale))
+        draw.polygon(pts, fill=color)
         return
 
     if style == "rosette":
-        # Small four-petal rosette.
+        # Four overlapping discs forming a four-petal rosette WITH a center
+        # disc so the cell-center always samples filled.
+        petal_r = size * 0.32
+        petal_offset = size * 0.18
         for i in range(4):
             a = i * math.pi / 2
-            pcx = cx + 0.3 * r * math.cos(a)
-            pcy = cy + 0.3 * r * math.sin(a)
-            draw.ellipse([(pcx - r * 0.55, pcy - r * 0.55),
-                          (pcx + r * 0.55, pcy + r * 0.55)], fill=color)
+            pcx = cx + petal_offset * math.cos(a)
+            pcy = cy + petal_offset * math.sin(a)
+            draw.ellipse([(pcx - petal_r, pcy - petal_r),
+                          (pcx + petal_r, pcy + petal_r)], fill=color)
+        # Central disc to guarantee center-sample reads filled.
+        center_r = size * 0.22
+        draw.ellipse([(cx - center_r, cy - center_r),
+                      (cx + center_r, cy + center_r)], fill=color)
         return
 
     # Fallback to square if unknown
