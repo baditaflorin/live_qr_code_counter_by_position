@@ -421,6 +421,12 @@ def _bg_watermark_frame(canvas: Image.Image, palette: Palette, seed: int, frame_
 
 # ---------- foreground motifs ----------
 
+def _safe_quiet_box(marker_box: tuple, pad: int = 18) -> tuple:
+    """The hands-off zone around the marker — motifs must not draw inside this."""
+    mx0, my0, mx1, my1 = marker_box
+    return (mx0 - pad, my0 - pad, mx1 + pad, my1 + pad)
+
+
 def _motif_heraldic_scroll(canvas: Image.Image, opts: BadgeOptions, palette: Palette,
                            marker_box: tuple, name: str) -> None:
     """Full heraldic shield: laurel wreath ringing the marker, crown above,
@@ -431,6 +437,7 @@ def _motif_heraldic_scroll(canvas: Image.Image, opts: BadgeOptions, palette: Pal
     cx_m = (mx0 + mx1) / 2
     cy_m = (my0 + my1) / 2
     w, h = canvas.size
+    qx0, qy0, qx1, qy1 = _safe_quiet_box(marker_box)
 
     # 1. Laurel wreath ringing the marker. Two arcs of leaves on left and right.
     wreath_r = (mx1 - mx0) * 0.85
@@ -452,6 +459,10 @@ def _motif_heraldic_scroll(canvas: Image.Image, opts: BadgeOptions, palette: Pal
             ld.line([(2, leaf_size * 0.225), (leaf_size - 3, leaf_size * 0.225)],
                     fill=palette.ink + (255,), width=1)
             leaf = leaf.rotate(tilt_deg, expand=True, resample=Image.BICUBIC)
+            # Skip leaves that would fall inside the marker's quiet zone.
+            leaf_cx = int(lx); leaf_cy = int(ly)
+            if qx0 <= leaf_cx <= qx1 and qy0 <= leaf_cy <= qy1:
+                continue
             canvas.paste(leaf, (int(lx - leaf.width / 2), int(ly - leaf.height / 2)), leaf)
         # Subtle arc line through the leaves.
         for i in range(20):
@@ -617,10 +628,9 @@ def _motif_postage_perforation(canvas: Image.Image, opts: BadgeOptions, palette:
     inset = 50
     for d in range(-h, w, hatch_step):
         draw.line([(d, inset), (d + h, inset + h)], fill=palette.accent, width=1)
-    # Erase hatching over the marker quiet zone.
-    quiet_pad = 16
-    draw.rectangle([(mx0 - quiet_pad, my0 - quiet_pad),
-                    (mx1 + quiet_pad, my1 + quiet_pad)], fill=palette.paper)
+    # Erase hatching over the marker quiet zone with a generous safe box.
+    qx0, qy0, qx1, qy1 = _safe_quiet_box(marker_box, pad=24)
+    draw.rectangle([(qx0, qy0), (qx1, qy1)], fill=palette.paper)
 
     # 2. Perforated edge — paper-coloured circles eating into the boundary.
     teeth_dia = 26
@@ -668,6 +678,68 @@ def _motif_postage_perforation(canvas: Image.Image, opts: BadgeOptions, palette:
     tw_v, th_v = bbox[2] - bbox[0], bbox[3] - bbox[1]
     draw.text((den_cx - tw_v / 2, den_cy - th_v / 2 - 4), val_text,
               fill=palette.paper, font=val_font)
+
+
+def _motif_poster_panel(canvas: Image.Image, opts: BadgeOptions, palette: Palette,
+                        marker_box: tuple, name: str) -> None:
+    """Inverted color: badge body is ink, with a small paper 'panel' framing
+    the marker. Big paper-coloured typography fills the rest. Reads as a
+    poster with a tiny stamp, not as an ID card."""
+    draw = ImageDraw.Draw(canvas)
+    w, h = canvas.size
+    mx0, my0, mx1, my1 = marker_box
+    cx_m = (mx0 + mx1) / 2
+
+    # 1. Repaint the entire canvas in ink color (the bg_pattern handler set
+    #    paper; the poster motif inverts to dark).
+    draw.rectangle([(0, 0), (w, h)], fill=palette.ink)
+
+    # 2. Draw a paper-coloured panel slightly larger than the marker — gives
+    #    the marker a clean white quiet zone surrounded by ink. Detection
+    #    needs the marker's outer black ring to have a sharp white border.
+    pad = 36
+    panel = (mx0 - pad, my0 - pad, mx1 + pad, my1 + pad)
+    draw.rectangle(panel, fill=palette.paper)
+    # Thin accent line around the panel.
+    draw.rectangle(panel, outline=palette.accent, width=2)
+
+    # 3. Above the marker — a workshop label in small caps, paper colour.
+    label_font = _load_font(int(h * 0.022))
+    label_text = "·  WITNESS  ·  CZOCHA  ·  WEMESHUP  ·"
+    bbox = draw.textbbox((0, 0), label_text, font=label_font)
+    tw = bbox[2] - bbox[0]
+    draw.text(((w - tw) / 2, int(h * 0.05)), label_text, fill=palette.paper, font=label_font)
+
+    # 4. Big participant name across the lower half — paper colour, monumental.
+    if name:
+        # Aim for ~70% of badge width.
+        target_w = w * 0.78
+        font_px = int(h * 0.10)
+        name_font = _load_font(font_px)
+        line = name if len(name) < 22 else name[:21] + "…"
+        bbox = draw.textbbox((0, 0), line, font=name_font)
+        tw = bbox[2] - bbox[0]
+        # Reduce font size if the name is too wide.
+        while tw > target_w and font_px > 24:
+            font_px -= 4
+            name_font = _load_font(font_px)
+            bbox = draw.textbbox((0, 0), line, font=name_font)
+            tw = bbox[2] - bbox[0]
+        draw.text(((w - tw) / 2, my1 + pad + int(h * 0.10)), line, fill=palette.paper, font=name_font)
+
+    # 5. Decorative dingbats above and below the name.
+    deco_y_top = my1 + pad + int(h * 0.07)
+    deco_y_bot = h - int(h * 0.10)
+    for y in (deco_y_top, deco_y_bot):
+        # Three diamond ornaments in the centre.
+        for offset in (-w * 0.08, 0, w * 0.08):
+            x = cx_m + offset
+            for r, fill in ((10, palette.accent), (5, palette.paper)):
+                draw.polygon([(x, y - r), (x + r, y), (x, y + r), (x - r, y)], fill=fill)
+
+    # 6. Corner pin marks — small cream dots at all four corners.
+    for cx, cy in [(40, 40), (w - 40, 40), (40, h - 40), (w - 40, h - 40)]:
+        draw.ellipse([(cx - 4, cy - 4), (cx + 4, cy + 4)], fill=palette.paper)
 
 
 # ---------- per-template layout ----------
@@ -739,6 +811,21 @@ TEMPLATE_LAYOUTS: dict[str, dict] = {
         "name_anchor": "center",
         "name_size_frac": 0.068,
         "id_pos_frac": (0.5, 0.82),
+        "border": "none",
+    },
+    # Inverted color scheme — badge is ink-color all over, marker sits in a
+    # small paper panel, big paper-coloured typography dominates. The marker
+    # stops being "the dark thing" — it becomes a small window in a dark poster.
+    "poster": {
+        "marker_size_frac": 0.26,
+        "marker_pos_frac": (0.37, 0.18),
+        "marker_rotation_deg": 0,
+        "bg_pattern": None,  # poster motif handles its own background
+        "motif": "poster_panel",
+        "name_pos_frac": None,  # name is rendered by the motif itself
+        "name_anchor": "center",
+        "name_size_frac": 0,
+        "id_pos_frac": None,
         "border": "none",
     },
     # Old default — kept for backward-compat with the very-first call shape.
@@ -814,6 +901,11 @@ def render_badge(aruco_id: int, name: str, opts: BadgeOptions) -> Image.Image:
             _motif_botanical_vines(canvas, opts, palette, marker_box, name)
         elif motif_name == "postage_perforation":
             _motif_postage_perforation(canvas, opts, palette, marker_box, name)
+        elif motif_name == "poster_panel":
+            # Poster repaints the whole canvas; do this BEFORE the marker is on it.
+            # We need to redo the marker paste since poster_panel paints over it.
+            _motif_poster_panel(canvas, opts, palette, marker_box, name)
+            canvas.paste(marker_img, (mx, my))
 
     # 5. Identity strip — name + id (unless the motif handled the name itself).
     draw = ImageDraw.Draw(canvas)
