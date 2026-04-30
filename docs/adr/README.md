@@ -86,6 +86,22 @@ system does when reality exceeds the configured envelope.
 | [0034](0034-multi-camera-coverage-planning.md) | Multi-camera coverage planner with blind-spot diagram    | 0003, 0005, 0031 |
 | [0035](0035-system-limits-and-degradation.md)  | Document the envelope + named degradation strategies     | every other ADR |
 
+## Six Thinking Hats — different lenses on the whole
+
+Six ADRs that step back from features and look at the system through the
+six De Bono lenses. Together they cover *what we know*, *what we feel*,
+*what could kill us*, *what we're for*, *what else could be*, and *how
+we decide what we decide*.
+
+| #    | Hat                                          | Decision |
+| ---- | -------------------------------------------- | -------- |
+| [0036](0036-white-hat-self-telemetry.md)       | 🤍 White (facts)       | Telemetry of the system itself        |
+| [0037](0037-red-hat-operator-vibe-channel.md)  | ❤️ Red (feelings)       | Honour the operator's gut as data     |
+| [0038](0038-black-hat-premortem-runbook.md)    | 🖤 Black (caution)      | Premortem & runbook with chaos drills |
+| [0039](0039-yellow-hat-2028-destination.md)    | 💛 Yellow (optimism)    | The 2028 destination — wooden box, 50 facilitators, 1,000 workshops |
+| [0040](0040-green-hat-twelve-wild-ideas.md)    | 💚 Green (creativity)   | Twelve wild ideas committed to paper  |
+| [0041](0041-blue-hat-adr-lifecycle.md)         | 💙 Blue (process)       | ADR lifecycle, quorum, re-read cadence |
+
 ## Suggested implementation order
 
 Smallest blast radius first, biggest leverage last:
