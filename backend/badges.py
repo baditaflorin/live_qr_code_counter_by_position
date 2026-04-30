@@ -892,8 +892,10 @@ def render_badge(aruco_id: int, name: str, opts: BadgeOptions) -> Image.Image:
     my = max(8, min(my, opts.badge_h - marker_img.height - 8))
     canvas.paste(marker_img, (mx, my))
 
-    # 4. Foreground motif (drawn on top of the marker layer's surroundings;
-    #    motifs themselves do not cross the marker's quiet zone).
+    # 4. Foreground motif. Some motifs paint heavily across the badge; we
+    #    re-paste the marker afterwards unconditionally so the marker is
+    #    always the topmost layer. Any decoration that would have crossed
+    #    the marker's quiet zone is simply hidden under the marker.
     motif_name = layout.get("motif")
     if motif_name:
         marker_box = (mx, my, mx + marker_img.width, my + marker_img.height)
@@ -904,10 +906,9 @@ def render_badge(aruco_id: int, name: str, opts: BadgeOptions) -> Image.Image:
         elif motif_name == "postage_perforation":
             _motif_postage_perforation(canvas, opts, palette, marker_box, name)
         elif motif_name == "poster_panel":
-            # Poster repaints the whole canvas; do this BEFORE the marker is on it.
-            # We need to redo the marker paste since poster_panel paints over it.
             _motif_poster_panel(canvas, opts, palette, marker_box, name)
-            canvas.paste(marker_img, (mx, my))
+        # Re-paste so the marker stays detectable regardless of what the motif drew.
+        canvas.paste(marker_img, (mx, my))
 
     # 5. Identity strip — name + id (unless the motif handled the name itself).
     draw = ImageDraw.Draw(canvas)
