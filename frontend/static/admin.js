@@ -155,6 +155,10 @@ function renderMarkers() {
     const lbl = el("label", { style: { fontSize: "12px" } }, cb, " select");
     actions.appendChild(lbl);
     actions.appendChild(el("button", {
+      onclick: () => sharePhoneDialog(m),
+      title: "Show QR code to open this marker on a phone",
+    }, "📱"));
+    actions.appendChild(el("button", {
       onclick: () => assignMarkerDialog(m),
     }, "Assign"));
     actions.appendChild(el("button", {
@@ -168,6 +172,46 @@ function renderMarkers() {
     card.appendChild(actions);
     markersGridEl.appendChild(card);
   }
+}
+
+function sharePhoneDialog(m) {
+  // Build URL using location.host. Warn if user is on localhost (phones can't reach it).
+  const host = location.host;
+  const onLocalhost = /^(localhost|127\.|0\.0\.0\.0)/.test(host);
+  const url = `${location.protocol}//${host}/m/${m.aruco_id}`;
+
+  const dlg = document.createElement("dialog");
+  dlg.style.maxWidth = "440px";
+  dlg.innerHTML = `
+    <h3 style="margin-top:0;">Share marker #${m.aruco_id} to a phone</h3>
+    <p class="muted" style="margin: 4px 0 12px;">Scan this with the phone's camera, then keep the page open. The marker fills the screen so the room camera can detect it.</p>
+    <div style="text-align:center; padding: 8px 0;">
+      <img alt="QR" style="width: 260px; height: 260px; background: white; border-radius: 8px;" />
+    </div>
+    <div style="font-family: ui-monospace, SF Mono, Menlo, monospace; word-break: break-all; padding: 8px; background: #0a1124; border-radius: 6px; font-size: 13px; margin-bottom: 8px;"></div>
+    ${onLocalhost ? `
+      <div style="background:#3b2a08; border:1px solid #f59e0b; border-radius:6px; padding:8px 10px; font-size:13px; margin-bottom:10px;">
+        <strong>Heads up:</strong> you're on <code>localhost</code>. Phones on your Wi-Fi can't reach this. Find your Mac's LAN IP with
+        <code>ipconfig getifaddr en0</code> in Terminal, then open <code>http://&lt;your-ip&gt;:8000/admin</code> from there and try again.
+      </div>` : ""}
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button data-action="copy">Copy link</button>
+      <button data-action="open">Open here</button>
+      <button data-action="close" class="primary">Done</button>
+    </div>
+  `;
+  dlg.querySelector("img").src = `/api/qr?text=${encodeURIComponent(url)}&size=8`;
+  dlg.querySelector("div[style*='monospace']").textContent = url;
+  dlg.querySelector('[data-action="copy"]').addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(url); } catch (_) {}
+  });
+  dlg.querySelector('[data-action="open"]').addEventListener("click", () => {
+    window.open(url, "_blank");
+  });
+  dlg.querySelector('[data-action="close"]').addEventListener("click", () => dlg.close());
+  dlg.addEventListener("close", () => dlg.remove());
+  document.body.appendChild(dlg);
+  dlg.showModal();
 }
 
 async function assignMarkerDialog(m) {

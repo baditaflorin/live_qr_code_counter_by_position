@@ -1,11 +1,14 @@
+import io
 import json
 import os
+import socket
 import time
 from pathlib import Path
 from typing import Optional
 
 import cv2
 import numpy as np
+import qrcode
 from fastapi import (
     Depends, FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect,
 )
@@ -75,7 +78,7 @@ def _question_to_out(q: Question) -> QuestionOut:
 
 def _next_aruco_id(db: Session) -> int:
     max_id = db.execute(select(func.max(Marker.aruco_id))).scalar()
-    return (max_id or -1) + 1
+    return 0 if max_id is None else max_id + 1
 
 
 # ---------- system info ----------
@@ -598,3 +601,47 @@ def root():
 @app.get("/admin")
 def admin():
     return FileResponse(str(FRONTEND / "admin.html"))
+
+
+@app.get("/m/{aruco_id}")
+def marker_phone_page(aruco_id: int, db: Session = Depends(get_db)):
+    """Fullscreen marker display optimised for phones."""
+    if not db.get(Marker, aruco_id):
+        raise HTTPException(404, "Marker not found")
+    return FileResponse(str(FRONTEND / "marker.html"))
+
+
+@app.get("/api/qr")
+def share_qr(text: str = Query(..., min_length=1, max_length=500), size: int = 6):
+    """Generate a QR code PNG that encodes the given text/URL — used for the 'share to phone' modal."""
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=max(2, min(size, 20)),
+        border=2,
+    )
+    qr.add_data(text)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
+
+
+@app.get("/api/system/lan")
+def lan_ips():
+    """Best-effort local IPs of the *host* the container is talking to.
+
+    Inside Docker we see container-local IPs which aren't useful for phones.
+    The frontend should prefer `location.host` if it's already an IP; this
+    endpoint returns a hint only.
+    """
+    ips: list[str] = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ips.append(s.getsockname()[0])
+        s.close()
+    except Exception:
+        pass
+    return {"ips": ips}

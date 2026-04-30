@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Marker</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: white; color: black;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  main {
+    width: 100%;
+    height: 100%;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .marker-box {
+    /* Fill as much of the smaller dimension as possible while staying square. */
+    aspect-ratio: 1 / 1;
+    max-width: min(92vw, 92dvh - 80px);
+    max-height: min(92vw, 92dvh - 80px);
+    background: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .marker-box img {
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated; /* keep crisp marker edges */
+    image-rendering: crisp-edges;
+  }
+  .label {
+    text-align: center;
+    margin-top: 12px;
+    font-size: 18px;
+    color: #333;
+  }
+  .label .id { font-weight: 700; color: #111; }
+  .hint {
+    position: fixed;
+    bottom: 8px; left: 0; right: 0;
+    text-align: center;
+    font-size: 11px;
+    color: #999;
+  }
+  button.fs {
+    margin-top: 8px;
+    background: #111;
+    color: white;
+    border: 0;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="marker-box">
+    <img id="marker-img" alt="ArUco marker" />
+  </div>
+  <div class="label">
+    <div><span id="person-name"></span></div>
+    <div class="id">#<span id="aruco-id"></span></div>
+    <button class="fs" id="fs-btn">Fullscreen</button>
+  </div>
+</main>
+<div class="hint">Keep this screen on. Hold steady, marker facing the camera.</div>
+<script>
+(async () => {
+  const path = location.pathname.split("/");
+  const id = parseInt(path[path.length - 1], 10);
+  document.getElementById("aruco-id").textContent = String(id);
+  document.getElementById("marker-img").src = `/api/markers/${id}/image`;
+
+  // Show person name if assigned
+  try {
+    const res = await fetch("/api/markers");
+    if (res.ok) {
+      const list = await res.json();
+      const m = list.find((x) => x.aruco_id === id);
+      if (m && m.person_name) document.getElementById("person-name").textContent = m.person_name;
+    }
+  } catch (_) {}
+
+  // Try to keep the screen awake (Wake Lock API — Chrome/Edge/Safari 16.4+).
+  let wl = null;
+  async function lock() {
+    try {
+      if ("wakeLock" in navigator) wl = await navigator.wakeLock.request("screen");
+    } catch (_) {}
+  }
+  lock();
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") lock();
+  });
+
+  // Fullscreen button (mostly for desktop browsers — phones get edge-to-edge already).
+  document.getElementById("fs-btn").addEventListener("click", async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch (_) {}
+  });
+})();
+</script>
+</body>
+</html>
