@@ -22,6 +22,21 @@ One decision per file, status `Proposed` until acted on. Each ADR is self-contai
 | [0049](0049-multi-placement-marker-strategy.md)| Multi-placement marker kit (hat + chest + back)         | 0048       |
 | [0050](0050-3d-scene-reconstruction.md)        | 3D scene reconstruction by fusing pose across cameras   | 0005, 0048, 0049 |
 
+## Crowdsourced sensing — every phone is a camera
+
+ADR 0034 plans cameras as fixed infrastructure; ADRs 0051–0055 invert the
+model. Participants log in, their phones become cameras, the mesh handles
+the constant churn, the room itself converges its own coverage from the
+ground floor up.
+
+| #    | Decision                                                              | Depends on |
+| ---- | --------------------------------------------------------------------- | ---------- |
+| [0051](0051-phone-as-camera-join.md)                       | Phone-as-camera join flow + lifecycle states          | 0034, 0050 |
+| [0052](0052-dynamic-camera-mesh.md)                        | Dynamic camera mesh; cameras come and go invisibly   | 0051       |
+| [0053](0053-ground-floor-coverage-convergence.md)          | Live coverage convergence + per-phone "fill the gap" pings | 0034, 0051, 0052 |
+| [0054](0054-self-calibration-via-shared-markers.md)        | Self-calibration from anchors / cross-camera observations / IMU | 0012, 0048, 0049, 0050 |
+| [0055](0055-quality-weighted-heterogeneous-fusion.md)      | Quality-weighted fusion for heterogeneous cameras    | 0050, 0051 |
+
 ## Operator UX & workflow
 
 | #    | Decision                                                              | Depends on |
