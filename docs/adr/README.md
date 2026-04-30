@@ -53,6 +53,26 @@ What turns the system from a tool into an artifact people remember.
 | [0019](0019-auto-highlight-reel.md)            | Auto-generated session highlight reel                    | 0008, 0010 |
 | [0020](0020-cross-day-memory.md)               | Cross-day participant memory ("welcome back")            | 0010, 0017 |
 
+## Participant cards — the room speaks back
+
+ADR 0011 reserved 16 IDs as **operator** commands. ADRs 0021–0030 reserve 32
+more as **participant** cards: a communal kit, picked up off a table, raised
+by anyone in the room. The slide deck calls participants "witnesses" and
+the kit is what gives them a voice the system can hear.
+
+| #    | Decision                                                              | Depends on |
+| ---- | --------------------------------------------------------------------- | ---------- |
+| [0021](0021-participant-control-markers.md)    | Reserve 32 IDs for participant cards (foundation)        | 0011       |
+| [0022](0022-card-handling-semantics.md)        | Multi-hand input: pulse / level / gesture fire-models    | 0021       |
+| [0023](0023-reaction-cards.md)                 | Reaction cards (yes / no / unsure / tender / lived / …) | 0021, 0022 |
+| [0024](0024-theme-cards.md)                    | Theme cards — the room labels its own data              | 0021, 0022 |
+| [0025](0025-intent-cards.md)                   | Intent cards — speak / listen / pair / pause / rest     | 0021, 0022 |
+| [0026](0026-composition-cards.md)              | Composition cards — the room changes the rules          | 0021, 0022 |
+| [0027](0027-witness-cards.md)                  | Witness cards — directional "I see you"                 | 0021, 0022 |
+| [0028](0028-memory-cards.md)                   | Memory cards — participant-bookmarked moments           | 0021, 0019 |
+| [0029](0029-promise-cards.md)                  | Promise cards — the closing commitment ritual           | 0017, 0020 |
+| [0030](0030-custom-card-decks.md)              | Custom decks per workshop — the kit as instrument       | 0010, 0021–0029 |
+
 ## Suggested implementation order
 
 Smallest blast radius first, biggest leverage last:
@@ -76,4 +96,14 @@ Smallest blast radius first, biggest leverage last:
 17. **0020** — cross-day memory. Builds on 0010 and 0017 — the through-line that makes Czocha feel like one event.
 18. **0018** — projection mode. The room becomes the canvas. Theatrical, but fully optional and zero-data-risk.
 19. **0019** — highlight reel. Last because it's privacy-sensitive (frame storage) and best done once retention + auth are solid.
-20. **0005** — multi-camera fusion; the most ambitious one, easiest after everything else is in place.
+20. **0021** — participant-card foundation. Cheap on its own; unlocks the next nine.
+21. **0022** — card-handling semantics. The protocol layer; without it the cards stay theory.
+22. **0023** — reaction cards. The simplest, highest-impact participant card class. Ship first to validate the kit idea.
+23. **0025** — intent cards. The operator's outlier-pick gets a queue.
+24. **0024** — theme cards. The dataset gains language.
+25. **0027** — witness cards. The mutual-acknowledgement layer the slide deck describes the workshop *as*.
+26. **0026** — composition cards. The room can change the rules.
+27. **0028** — memory cards. The reel becomes co-authored.
+28. **0029** — promise cards. The closing ritual gains a recorded artifact.
+29. **0030** — custom decks. Turns the system from a Czocha tool into a workshop instrument other facilitators can adopt.
+30. **0005** — multi-camera fusion; the most ambitious infrastructure piece, easiest after everything else is in place.
