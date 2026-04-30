@@ -37,6 +37,20 @@ ground floor up.
 | [0054](0054-self-calibration-via-shared-markers.md)        | Self-calibration from anchors / cross-camera observations / IMU | 0012, 0048, 0049, 0050 |
 | [0055](0055-quality-weighted-heterogeneous-fusion.md)      | Quality-weighted fusion for heterogeneous cameras    | 0050, 0051 |
 
+## Make it real — production scaffolding
+
+The first 55 ADRs say *what we'll build*. These five say *how we get there*:
+hardware, schedule, pilot protocol, automated tests, and the document a
+stranger reads on a Saturday morning and runs their first workshop on Tuesday.
+
+| #    | Decision                                                              | Depends on |
+| ---- | --------------------------------------------------------------------- | ---------- |
+| [0056](0056-reference-hardware-kit.md)         | Reference hardware kit — three tiers, today's BOM        | 0031, 0039 |
+| [0057](0057-mvp-slice-90-day-rollout.md)       | MVP slice & 90-day rollout plan, three real workshops    | 0001–0055  |
+| [0058](0058-pilot-workshop-protocol.md)        | Pilot workshop protocol — consent, briefing, debrief     | 0010, 0037, 0057 |
+| [0059](0059-end-to-end-smoke-test.md)          | End-to-end smoke test + nightly + golden-fixture layers  | 0002       |
+| [0060](0060-operator-handbook.md)              | Operator handbook & onboarding path (5 chapters)         | 0038, 0056, 0058 |
+
 ## Operator UX & workflow
 
 | #    | Decision                                                              | Depends on |
