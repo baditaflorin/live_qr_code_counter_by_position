@@ -26,6 +26,7 @@ from .schemas import (
     QuestionIn, QuestionOut, VoteOut, ZoneIn, ZoneOut,
 )
 from .seeds.czocha_day1 import as_records as _czocha_day1_records
+from .seeds.default_zones import records_for as _default_zones_records, DEFAULTS_BY_FORMATION
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -64,6 +65,7 @@ def _zone_to_out(z: Zone) -> ZoneOut:
         label=z.label,
         color=z.color,
         polygon=z.points(),
+        formation=z.formation,
         created_at=z.created_at,
     )
 
@@ -263,8 +265,11 @@ def markers_pdf(
 # ---------- zones ----------
 
 @app.get("/api/zones", response_model=list[ZoneOut])
-def list_zones(db: Session = Depends(get_db)):
-    rows = db.execute(select(Zone).order_by(Zone.id)).scalars().all()
+def list_zones(formation: Optional[str] = None, db: Session = Depends(get_db)):
+    stmt = select(Zone).order_by(Zone.formation.is_(None).desc(), Zone.formation.asc(), Zone.id.asc())
+    if formation:
+        stmt = select(Zone).where(Zone.formation == formation).order_by(Zone.id)
+    rows = db.execute(stmt).scalars().all()
     return [_zone_to_out(z) for z in rows]
 
 
@@ -277,6 +282,7 @@ def create_zone(payload: ZoneIn, db: Session = Depends(get_db)):
         label=payload.label.strip(),
         color=payload.color,
         polygon=json.dumps(payload.polygon),
+        formation=(payload.formation or None),
     )
     db.add(z)
     db.commit()
@@ -295,6 +301,7 @@ def update_zone(zone_id: int, payload: ZoneIn, db: Session = Depends(get_db)):
     z.label = payload.label.strip()
     z.color = payload.color
     z.polygon = json.dumps(payload.polygon)
+    z.formation = payload.formation or None
     db.commit()
     db.refresh(z)
     return _zone_to_out(z)
@@ -308,6 +315,36 @@ def delete_zone(zone_id: int, db: Session = Depends(get_db)):
     db.delete(z)
     db.commit()
     return {"ok": True}
+
+
+@app.post("/api/zones/seed/defaults", response_model=list[ZoneOut])
+def seed_default_zones(
+    formations: Optional[str] = None,
+    replace: bool = True,
+    db: Session = Depends(get_db),
+):
+    """Drop default zone polygons for each formation. Pass `formations=line,two_camps` to limit."""
+    keys = [k.strip() for k in formations.split(",")] if formations else None
+    records = _default_zones_records(keys)
+    if replace:
+        target = {r["formation"] for r in records}
+        if target:
+            db.query(Zone).filter(Zone.formation.in_(target)).delete(synchronize_session=False)
+    created: list[Zone] = []
+    for r in records:
+        z = Zone(
+            name=r["name"],
+            label=r["label"],
+            color=r["color"],
+            polygon=json.dumps(r["polygon"]),
+            formation=r["formation"],
+        )
+        db.add(z)
+        created.append(z)
+    db.commit()
+    for z in created:
+        db.refresh(z)
+    return [_zone_to_out(z) for z in created]
 
 
 # ---------- questions / votes ----------
@@ -388,9 +425,13 @@ def bulk_create_questions(payload: QuestionBulkIn, db: Session = Depends(get_db)
     return [_question_to_out(q) for q in created]
 
 
-@app.post("/api/questions/seed/czocha-day-1", response_model=list[QuestionOut])
-def seed_czocha_day_1(replace: bool = True, db: Session = Depends(get_db)):
-    """Load the Czocha Day 1 deck (Knights' Hall opening + privilege walk + four corners)."""
+@app.post("/api/questions/seed/czocha-day-1")
+def seed_czocha_day_1(
+    replace: bool = True,
+    include_zones: bool = True,
+    db: Session = Depends(get_db),
+):
+    """Load the Czocha Day 1 deck (questions) and the matching default zone templates."""
     records = _czocha_day1_records()
     if replace:
         blocks = {r["block"] for r in records if r.get("block")}
@@ -398,7 +439,7 @@ def seed_czocha_day_1(replace: bool = True, db: Session = Depends(get_db)):
             db.query(Question).filter(Question.block.in_(blocks)).delete(
                 synchronize_session=False
             )
-    created: list[Question] = []
+    created_q: list[Question] = []
     for r in records:
         q = Question(
             text=r["text"],
@@ -407,11 +448,34 @@ def seed_czocha_day_1(replace: bool = True, db: Session = Depends(get_db)):
             position=r.get("position") or 0,
         )
         db.add(q)
-        created.append(q)
+        created_q.append(q)
     db.commit()
-    for q in created:
+    for q in created_q:
         db.refresh(q)
-    return [_question_to_out(q) for q in created]
+
+    created_z: list[Zone] = []
+    if include_zones:
+        # Seed default zones only for the formations actually used in this deck.
+        used = sorted({r["formation"] for r in records if r.get("formation")})
+        zone_records = _default_zones_records(used)
+        target = {r["formation"] for r in zone_records}
+        if target:
+            db.query(Zone).filter(Zone.formation.in_(target)).delete(synchronize_session=False)
+        for zr in zone_records:
+            z = Zone(
+                name=zr["name"], label=zr["label"], color=zr["color"],
+                polygon=json.dumps(zr["polygon"]), formation=zr["formation"],
+            )
+            db.add(z)
+            created_z.append(z)
+        db.commit()
+        for z in created_z:
+            db.refresh(z)
+
+    return {
+        "questions": [_question_to_out(q).model_dump() for q in created_q],
+        "zones":     [_zone_to_out(z).model_dump() for z in created_z],
+    }
 
 
 @app.put("/api/questions/{question_id}/activate", response_model=QuestionOut)
@@ -588,16 +652,19 @@ def _count_by_zone(votes: list[Vote]) -> dict[str, int]:
 @app.websocket("/ws/detect")
 async def ws_detect(ws: WebSocket):
     await ws.accept()
-    last_zone_reload = 0.0
+    last_state_reload = 0.0
     cached_zones: list[dict] = []
+    cached_active: Optional[dict] = None
 
     try:
         while True:
             data = await ws.receive_bytes()
             now = time.time()
-            if now - last_zone_reload > 1.0:
-                cached_zones = _load_zones_dict()
-                last_zone_reload = now
+            if now - last_state_reload > 1.0:
+                cached_active = _load_active_question()
+                active_formation = cached_active.get("formation") if cached_active else None
+                cached_zones = _load_zones_dict(formation=active_formation)
+                last_state_reload = now
 
             arr = np.frombuffer(data, dtype=np.uint8)
             frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -616,7 +683,6 @@ async def ws_detect(ws: WebSocket):
             zone_counts: dict[int, int] = {z["id"]: 0 for z in cached_zones}
             zone_label_lookup = {z["id"]: z["label"] for z in cached_zones}
 
-            # Look up person names for currently-visible markers (cheap; in-memory cache)
             person_map = _person_map_for(set(d.aruco_id for d in results))
 
             detections_payload = []
@@ -642,6 +708,8 @@ async def ws_detect(ws: WebSocket):
                     "ok": True,
                     "frame_w": w,
                     "frame_h": h,
+                    "active_question": cached_active,
+                    "zones": cached_zones,
                     "detections": detections_payload,
                     "zone_counts": zone_counts,
                 }
@@ -655,11 +723,28 @@ async def ws_detect(ws: WebSocket):
             pass
 
 
-def _load_zones_dict() -> list[dict]:
+def _load_zones_dict(formation: Optional[str] = None) -> list[dict]:
+    """Zones currently in scope for the live overlay.
+
+    If `formation` is set, only zones tagged with that formation are returned —
+    this is what makes the overlay swap automatically when the active question
+    changes from `line` to `matrix_2x2` etc.
+
+    If no formation is requested, fall back to: zones whose formation is null
+    (manually-drawn legacy zones). This keeps the live page useful when no
+    question is active without dumping every formation's zones at once.
+    """
     from .db import SessionLocal
     db = SessionLocal()
     try:
-        rows = db.execute(select(Zone).order_by(Zone.id)).scalars().all()
+        if formation:
+            rows = db.execute(
+                select(Zone).where(Zone.formation == formation).order_by(Zone.id)
+            ).scalars().all()
+        else:
+            rows = db.execute(
+                select(Zone).where(Zone.formation.is_(None)).order_by(Zone.id)
+            ).scalars().all()
         return [
             {
                 "id": z.id,
@@ -667,9 +752,28 @@ def _load_zones_dict() -> list[dict]:
                 "label": z.label,
                 "color": z.color,
                 "polygon": z.points(),
+                "formation": z.formation,
             }
             for z in rows
         ]
+    finally:
+        db.close()
+
+
+def _load_active_question() -> Optional[dict]:
+    from .db import SessionLocal
+    db = SessionLocal()
+    try:
+        q = db.execute(select(Question).where(Question.is_active == 1)).scalars().first()
+        if not q:
+            return None
+        return {
+            "id": q.id,
+            "text": q.text,
+            "block": q.block,
+            "formation": q.formation,
+            "position": q.position or 0,
+        }
     finally:
         db.close()
 

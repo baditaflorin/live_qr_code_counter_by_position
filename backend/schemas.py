@@ -42,6 +42,7 @@ class ZoneIn(BaseModel):
     label: str = ""
     color: str = "#22c55e"
     polygon: list[list[float]]  # [[x,y], ...] normalized 0..1
+    formation: Optional[str] = None
 
 
 class ZoneOut(BaseModel):
@@ -50,6 +51,7 @@ class ZoneOut(BaseModel):
     label: str
     color: str
     polygon: list[list[float]]
+    formation: Optional[str] = None
     created_at: datetime
 
 

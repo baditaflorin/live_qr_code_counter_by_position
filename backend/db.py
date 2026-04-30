@@ -52,6 +52,7 @@ class Zone(Base):
     label: Mapped[str] = mapped_column(String(100), nullable=False, default="")
     color: Mapped[str] = mapped_column(String(20), nullable=False, default="#22c55e")
     polygon: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list of [x,y] in 0..1
+    formation: Mapped[Optional[str]] = mapped_column(String(40), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     def points(self) -> list[list[float]]:
@@ -97,15 +98,22 @@ def _migrate_questions() -> None:
 
     Avoids a hard dependency on Alembic. Only runs ALTER TABLE for missing columns.
     """
-    needed = {
+    q_needed = {
         "block":     "ALTER TABLE questions ADD COLUMN block VARCHAR(200)",
         "formation": "ALTER TABLE questions ADD COLUMN formation VARCHAR(40)",
         "position":  "ALTER TABLE questions ADD COLUMN position INTEGER DEFAULT 0",
     }
+    z_needed = {
+        "formation": "ALTER TABLE zones ADD COLUMN formation VARCHAR(40)",
+    }
     with engine.begin() as conn:
-        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(questions)").all()}
-        for col, ddl in needed.items():
-            if col not in cols:
+        q_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(questions)").all()}
+        for col, ddl in q_needed.items():
+            if col not in q_cols:
+                conn.exec_driver_sql(ddl)
+        z_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(zones)").all()}
+        for col, ddl in z_needed.items():
+            if col not in z_cols:
                 conn.exec_driver_sql(ddl)
 
 

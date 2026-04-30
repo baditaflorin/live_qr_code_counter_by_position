@@ -74,10 +74,26 @@
       </div>
     </div>
     <div class="panel">
+      <h3 style="margin-top:0;">Zone templates</h3>
+      <div class="row">
+        <button id="seed-zones-btn" class="primary">Load default templates (all formations)</button>
+        <span class="muted">Drops 5 line / 5 spectrum / 2 two_camps / 4 matrix / 1 circle / 5 privilege_walk zones. Replaces any existing zones tagged with those formations.</span>
+      </div>
+    </div>
+    <div class="panel">
       <h3 style="margin-top:0;">Draw a new zone</h3>
       <div class="row" style="margin-bottom: 8px;">
         <input id="zone-name" type="text" placeholder="Internal name (e.g. left-area)" />
         <input id="zone-label" type="text" placeholder="Display label (e.g. Yes)" />
+        <select id="zone-formation">
+          <option value="">— formation —</option>
+          <option value="line">line</option>
+          <option value="spectrum">spectrum</option>
+          <option value="two_camps">two_camps</option>
+          <option value="circle">circle</option>
+          <option value="matrix_2x2">matrix_2x2</option>
+          <option value="privilege_walk">privilege_walk</option>
+        </select>
         <input id="zone-color" type="color" value="#22c55e" />
         <button id="zone-undo">Undo point</button>
         <button id="zone-clear">Clear</button>

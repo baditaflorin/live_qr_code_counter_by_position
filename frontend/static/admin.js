@@ -261,6 +261,7 @@ const zSnapshotBtn = document.getElementById("z-snapshot");
 const zoneNameInput = document.getElementById("zone-name");
 const zoneLabelInput = document.getElementById("zone-label");
 const zoneColorInput = document.getElementById("zone-color");
+const zoneFormationSel = document.getElementById("zone-formation");
 const zoneUndoBtn = document.getElementById("zone-undo");
 const zoneClearBtn = document.getElementById("zone-clear");
 const zoneSaveBtn = document.getElementById("zone-save");
@@ -421,6 +422,7 @@ zoneSaveBtn.addEventListener("click", async () => {
     label: zoneLabelInput.value.trim(),
     color: zoneColorInput.value,
     polygon: drawingPoints,
+    formation: zoneFormationSel.value || null,
   };
   try {
     if (editingZoneId) {
@@ -432,7 +434,17 @@ zoneSaveBtn.addEventListener("click", async () => {
     editingZoneId = null;
     zoneNameInput.value = "";
     zoneLabelInput.value = "";
+    zoneFormationSel.value = "";
     await loadZones();
+  } catch (e) { alert(e.message); }
+});
+
+document.getElementById("seed-zones-btn").addEventListener("click", async () => {
+  if (!confirm("Load the default zone templates? Existing zones tagged with line/spectrum/two_camps/circle/matrix_2x2/privilege_walk will be replaced.")) return;
+  try {
+    const created = await api("/api/zones/seed/defaults?replace=true", { method: "POST", body: {} });
+    await loadZones();
+    alert(`Loaded ${created.length} zones.`);
   } catch (e) { alert(e.message); }
 });
 
@@ -449,49 +461,63 @@ async function loadZones() {
 function renderZonesList() {
   clear(zonesListEl);
   if (!zoneZonesCache.length) {
-    zonesListEl.appendChild(el("div", { class: "muted" }, "No zones yet."));
+    zonesListEl.appendChild(el("div", { class: "muted" }, "No zones yet — click 'Load default templates' above for a working set."));
     return;
   }
-  const tbl = el("table", {});
-  tbl.appendChild(el("thead", {}, el("tr", {},
-    el("th", {}, "Color"),
-    el("th", {}, "Name"),
-    el("th", {}, "Label"),
-    el("th", {}, "Points"),
-    el("th", {}, "Actions"),
-  )));
-  const tb = el("tbody", {});
+  const groups = new Map();
   for (const z of zoneZonesCache) {
-    tb.appendChild(el("tr", {},
-      el("td", {}, el("span", { style: { display: "inline-block", width: "16px", height: "16px", background: z.color, borderRadius: "3px" } })),
-      el("td", {}, z.name),
-      el("td", {}, z.label || ""),
-      el("td", {}, String(z.polygon.length)),
-      el("td", {},
-        el("button", {
-          onclick: () => {
-            editingZoneId = z.id;
-            zoneNameInput.value = z.name;
-            zoneLabelInput.value = z.label || "";
-            zoneColorInput.value = z.color || "#22c55e";
-            drawingPoints = z.polygon.map((p) => [...p]);
-            redrawZoneCanvas();
-          }
-        }, "Edit polygon"),
-        " ",
-        el("button", {
-          class: "danger",
-          onclick: async () => {
-            if (!confirm(`Delete zone "${z.name}"?`)) return;
-            await api(`/api/zones/${z.id}`, { method: "DELETE" });
-            await loadZones();
-          }
-        }, "Delete"),
-      ),
-    ));
+    const k = z.formation || "(unassigned)";
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(z);
   }
-  tbl.appendChild(tb);
-  zonesListEl.appendChild(tbl);
+  for (const [formation, items] of groups) {
+    const wrap = el("div", { style: { marginBottom: "16px" } });
+    wrap.appendChild(el("div", {
+      style: { fontWeight: 600, padding: "6px 0", fontSize: "14px", color: "#cbd5e1" }
+    }, formation, "  ", el("span", { class: "muted", style: { fontWeight: 400 } }, `(${items.length})`)));
+    const tbl = el("table", {});
+    tbl.appendChild(el("thead", {}, el("tr", {},
+      el("th", { style: { width: "40px" } }, ""),
+      el("th", {}, "Name"),
+      el("th", {}, "Label"),
+      el("th", { style: { width: "60px" } }, "Pts"),
+      el("th", { style: { width: "220px" } }, "Actions"),
+    )));
+    const tb = el("tbody", {});
+    for (const z of items) {
+      tb.appendChild(el("tr", {},
+        el("td", {}, el("span", { style: { display: "inline-block", width: "16px", height: "16px", background: z.color, borderRadius: "3px" } })),
+        el("td", {}, z.name),
+        el("td", {}, z.label || ""),
+        el("td", {}, String(z.polygon.length)),
+        el("td", {},
+          el("button", {
+            onclick: () => {
+              editingZoneId = z.id;
+              zoneNameInput.value = z.name;
+              zoneLabelInput.value = z.label || "";
+              zoneColorInput.value = z.color || "#22c55e";
+              zoneFormationSel.value = z.formation || "";
+              drawingPoints = z.polygon.map((p) => [...p]);
+              redrawZoneCanvas();
+            }
+          }, "Edit"),
+          " ",
+          el("button", {
+            class: "danger",
+            onclick: async () => {
+              if (!confirm(`Delete zone "${z.name}"?`)) return;
+              await api(`/api/zones/${z.id}`, { method: "DELETE" });
+              await loadZones();
+            }
+          }, "×"),
+        ),
+      ));
+    }
+    tbl.appendChild(tb);
+    wrap.appendChild(tbl);
+    zonesListEl.appendChild(wrap);
+  }
 }
 
 zStartBtn.addEventListener("click", startZCam);

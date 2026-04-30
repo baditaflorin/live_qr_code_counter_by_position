@@ -14,6 +14,12 @@ const detectedListEl = document.getElementById("detected-list");
 const activeQuestionSel = document.getElementById("active-question");
 const snapshotBtn = document.getElementById("snapshot-btn");
 const lastSnapshotEl = document.getElementById("last-snapshot");
+const prevQBtn = document.getElementById("prev-question-btn");
+const nextQBtn = document.getElementById("next-question-btn");
+const activeBannerEl = document.getElementById("active-question-banner");
+const activeBlockEl = document.getElementById("active-block");
+const activeTextEl = document.getElementById("active-text");
+const activeFormationEl = document.getElementById("active-formation");
 
 let mediaStream = null;
 let ws = null;
@@ -23,6 +29,7 @@ let captureCtx = captureCanvas.getContext("2d");
 let lastResult = null;
 let lastSentTimestamps = [];
 let zonesCache = [];
+let questionsCache = [];
 
 function setStatus(text, kind = "") {
   statusPill.textContent = text;
@@ -59,9 +66,26 @@ async function loadZones() {
 
 async function loadQuestions() {
   try {
-    const qs = await api("/api/questions");
-    activeQuestionSel.innerHTML = '<option value="">— none —</option>' +
-      qs.map((q) => `<option value="${q.id}" ${q.is_active ? "selected" : ""}>${escapeHtml(q.text)}</option>`).join("");
+    questionsCache = await api("/api/questions");
+    // Group options by block for readability.
+    const groups = new Map();
+    for (const q of questionsCache) {
+      const k = q.block || "(unblocked)";
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(q);
+    }
+    let html = '<option value="">— none —</option>';
+    for (const [block, items] of groups) {
+      html += `<optgroup label="${escapeHtml(block)}">`;
+      for (const q of items) {
+        const label = q.formation
+          ? `${q.position ? q.position + ". " : ""}${q.text}  [${q.formation}]`
+          : `${q.position ? q.position + ". " : ""}${q.text}`;
+        html += `<option value="${q.id}" ${q.is_active ? "selected" : ""}>${escapeHtml(label)}</option>`;
+      }
+      html += `</optgroup>`;
+    }
+    activeQuestionSel.innerHTML = html;
   } catch (e) {
     console.error(e);
   }
@@ -135,6 +159,10 @@ function openWS() {
         return;
       }
       lastResult = msg;
+      // Server filters zones by the active question's formation, so the
+      // overlay automatically swaps when you activate a different question.
+      if (Array.isArray(msg.zones)) zonesCache = msg.zones;
+      renderActiveBanner(msg.active_question);
       drawOverlay(msg);
       renderZoneCounts(msg.zone_counts || {}, zonesCache);
       renderDetected(msg.detections || []);
@@ -143,6 +171,22 @@ function openWS() {
       console.error(e);
     }
   };
+}
+
+function renderActiveBanner(active) {
+  if (!active) {
+    activeBannerEl.hidden = true;
+    return;
+  }
+  activeBannerEl.hidden = false;
+  activeBlockEl.textContent = active.block || "";
+  activeTextEl.textContent = (active.position ? `${active.position}. ` : "") + active.text;
+  if (active.formation) {
+    activeFormationEl.textContent = active.formation;
+    activeFormationEl.hidden = false;
+  } else {
+    activeFormationEl.hidden = true;
+  }
 }
 
 function tickFps() {
@@ -337,10 +381,30 @@ activeQuestionSel.addEventListener("change", async () => {
     } else {
       await api(`/api/questions/deactivate-all`, { method: "PUT" });
     }
+    await loadQuestions();
   } catch (e) {
     console.error(e);
   }
 });
+
+async function stepActiveQuestion(delta) {
+  if (!questionsCache.length) return;
+  const idx = questionsCache.findIndex((q) => q.is_active);
+  let next;
+  if (idx === -1) {
+    next = delta > 0 ? questionsCache[0] : questionsCache[questionsCache.length - 1];
+  } else {
+    const ni = idx + delta;
+    if (ni < 0 || ni >= questionsCache.length) return;
+    next = questionsCache[ni];
+  }
+  try {
+    await api(`/api/questions/${next.id}/activate`, { method: "PUT" });
+    await loadQuestions();
+  } catch (e) { console.error(e); }
+}
+prevQBtn.addEventListener("click", () => stepActiveQuestion(-1));
+nextQBtn.addEventListener("click", () => stepActiveQuestion(+1));
 
 startBtn.addEventListener("click", start);
 stopBtn.addEventListener("click", stop);
