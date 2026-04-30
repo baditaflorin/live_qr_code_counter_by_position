@@ -41,6 +41,18 @@ cards up to the camera instead of clicking a laptop.
 | [0014](0014-marker-driven-session-control.md)  | Hands-free session control: start/stop/next/snapshot    | 0011       |
 | [0015](0015-anchor-drift-detection.md)         | Anchors detect camera drift and self-recalibrate        | 0011, 0012 |
 
+## Magic & polish — the experience layer
+
+What turns the system from a tool into an artifact people remember.
+
+| #    | Decision                                                              | Depends on |
+| ---- | --------------------------------------------------------------------- | ---------- |
+| [0016](0016-audio-cues.md)                     | Audio cues so the system stops being silent              | —          |
+| [0017](0017-personal-reflection-card.md)       | One-page reflection card per participant                 | 0010       |
+| [0018](0018-projection-mode.md)                | `/project` mode — the room as canvas                     | 0003       |
+| [0019](0019-auto-highlight-reel.md)            | Auto-generated session highlight reel                    | 0008, 0010 |
+| [0020](0020-cross-day-memory.md)               | Cross-day participant memory ("welcome back")            | 0010, 0017 |
+
 ## Suggested implementation order
 
 Smallest blast radius first, biggest leverage last:
@@ -48,15 +60,20 @@ Smallest blast radius first, biggest leverage last:
 1. **0002** — get migrations in place before any more schema churn (10 min).
 2. **0001** — close the auth hole now while traffic is local-only (an afternoon).
 3. **0009** — audit-log goes in cheap once auth lands; gives forensics for everything that follows.
-4. **0006** — presenter mode is pure frontend; ships value to the next workshop with no backend risk.
-5. **0007** — CSV import; biggest UX win for actual workshop setup.
-6. **0011** — control-marker infrastructure. Cheap on its own; unlocks the next four.
-7. **0004** — marker tracker; visible jitter goes away.
-8. **0014** — hands-free session control. First payoff of 0011 — the operator stops touching the laptop.
-9. **0003** — homography model + manual calibration UI.
-10. **0012** — auto-calibration via corner markers. Replaces 0003's manual UX with a 30-second floor-walk.
-11. **0015** — drift detection on top of 0012's anchors. Catches silent-failure mode.
-12. **0013** — wand-based zone authoring. Best done after the operator's tooling and detection are mature.
-13. **0008** — timeline replay, reusing 0003's floor coords.
-14. **0010** — workshop scoping + retention; right-sizes the data layer.
-15. **0005** — multi-camera fusion; the most ambitious one, easiest after everything else is in place.
+4. **0016** — audio cues. Tiny diff, big confidence boost for the operator. Land before any production workshop.
+5. **0006** — presenter mode is pure frontend; ships value to the next workshop with no backend risk.
+6. **0007** — CSV import; biggest UX win for actual workshop setup.
+7. **0011** — control-marker infrastructure. Cheap on its own; unlocks four more ADRs.
+8. **0004** — marker tracker; visible jitter goes away.
+9. **0014** — hands-free session control. First payoff of 0011 — the operator stops touching the laptop.
+10. **0003** — homography model + manual calibration UI.
+11. **0012** — auto-calibration via corner markers. Replaces 0003's manual UX with a 30-second floor-walk.
+12. **0015** — drift detection on top of 0012's anchors. Catches silent-failure mode.
+13. **0013** — wand-based zone authoring. Best done after the operator's tooling and detection are mature.
+14. **0008** — timeline replay, reusing 0003's floor coords.
+15. **0010** — workshop scoping + retention; right-sizes the data layer.
+16. **0017** — personal reflection card. Right after scoping lands so the data is per-workshop.
+17. **0020** — cross-day memory. Builds on 0010 and 0017 — the through-line that makes Czocha feel like one event.
+18. **0018** — projection mode. The room becomes the canvas. Theatrical, but fully optional and zero-data-risk.
+19. **0019** — highlight reel. Last because it's privacy-sensitive (frame storage) and best done once retention + auth are solid.
+20. **0005** — multi-camera fusion; the most ambitious one, easiest after everything else is in place.
