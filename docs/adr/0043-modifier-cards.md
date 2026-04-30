@@ -1,7 +1,7 @@
 # ADR 0043 — Modifier cards: qualifier primitives
 
 ## Status
-Proposed (depends on ADR 0021 foundation, ADR 0042 budget, ADR 0047 grammar).
+**Superseded by ADR 0061.** Card-grammar approach abandoned — too slow, too thinky for a live room. Replaced by ADRs 0062–0066 (pulse polls, reactions, tournaments, ranking, idea+upvote).
 
 ## Context
 Reaction cards (ADR 0023) carry their qualifier baked in. `REACT_TENDER` already means *"this is hard for me"*. `REACT_LIVED` already means *"I have lived this"*. That's expressive at the cost of *combinatorial explosion*: every shade of "yes" wants its own card — `YES_STRONGLY`, `YES_BARELY`, `YES_AGAIN`, `YES_NOT_QUITE`. Pretty soon the kit has 80 cards and the participant can't find any of them.

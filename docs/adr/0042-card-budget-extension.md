@@ -1,7 +1,7 @@
 # ADR 0042 — Participant card budget extension: 32 → 96 reserved IDs
 
 ## Status
-Proposed (supersedes the **ID-count** portion of ADR 0021; the foundation idea of 0021 stands).
+**Superseded by ADR 0061.** The budget extension *is* still useful (we genuinely need more than 32 IDs); ADR 0067 keeps the 96-ID reservation but spends it on fun activation cards instead of grammar primitives.
 
 ## Context
 ADR 0021 reserved **32 IDs** (202–233 in `DICT_4X4_250`) for participant cards. By the time ADRs 0023–0029 were written, the actual demand was already over budget:

@@ -1,7 +1,7 @@
 # ADR 0045 — Quantity cards: numeric primitives
 
 ## Status
-Proposed (depends on ADR 0042, 0047 grammar).
+**Superseded by ADR 0061.** Numeric voting still wanted but delivered via ADR 0064 tournaments + ADR 0065 quick-rank, not via grammar-composed numbers.
 
 ## Context
 The slide deck includes questions whose answer is *a number* — *"how much sleep did you get this week?"*, *"how nervous are you?"*. Today the system maps these to a 5-stripe line formation, which forces a continuous answer into 5 buckets and gives the operator no way to ask *"on a scale of 1–10, how nervous?"* without redrawing zones.

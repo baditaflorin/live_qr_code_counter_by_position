@@ -105,22 +105,37 @@ the kit is what gives them a voice the system can hear.
 | [0029](0029-promise-cards.md)                  | Promise cards — the closing commitment ritual           | 0017, 0020 |
 | [0030](0030-custom-card-decks.md)              | Custom decks per workshop — the kit as instrument       | 0010, 0021–0029 |
 
-### Grammar layer — the kit becomes a language
+### Grammar layer — *abandoned, kept as history*
 
-ADRs 0023–0029 give the kit *atoms* (one card → one meaning).
-ADRs 0042–0047 give it *primitives* that compose: modifier + subject +
-quantity + connector. Together they let participants build sentences
-from a small vocabulary, instead of needing a dedicated card for every
-shade of meaning.
+ADRs 0042–0047 designed a "card grammar" — modifier + subject + verb +
+connector — that turned out to be the wrong cognitive frame for a live
+workshop (too slow, too thinky). Superseded by ADR 0061 and replaced by
+the **activation kit** below.
+
+| #    | Decision                                                              | Status     |
+| ---- | --------------------------------------------------------------------- | ---------- |
+| [0042](0042-card-budget-extension.md)          | Reserve 96 IDs (138–233)                                  | Superseded by 0061 (the budget *count* is kept, allocation moves to 0067) |
+| [0043](0043-modifier-cards.md)                 | Modifier primitives                                        | Superseded by 0061 |
+| [0044](0044-pronoun-cards.md)                  | Pronoun primitives                                         | Superseded by 0061 |
+| [0045](0045-quantity-cards.md)                 | Quantity primitives                                        | Superseded by 0061 |
+| [0046](0046-connector-cards.md)                | Connector primitives                                       | Superseded by 0061 |
+| [0047](0047-card-grammar.md)                   | Six-slot grammar protocol                                  | Superseded by 0061 |
+
+### Activation kit — fast votes, fun decisions, visible theatre
+
+ADRs 0061–0067 replace the grammar layer with an *arcade of decisions*:
+single-gesture cards each completing in seconds, each producing a
+visible group artefact. *Activation, not articulation.*
 
 | #    | Decision                                                              | Depends on |
 | ---- | --------------------------------------------------------------------- | ---------- |
-| [0042](0042-card-budget-extension.md)          | Extend reserved range 32 → 96 IDs (138–233)              | 0011, 0021 (supersedes id-count portion) |
-| [0043](0043-modifier-cards.md)                 | Modifier cards: STRONGLY / NOT / MAYBE / AS-IF / …      | 0042, 0047 |
-| [0044](0044-pronoun-cards.md)                  | Pronoun cards: I / YOU / US / THEM / ANYONE / …         | 0042, 0047 |
-| [0045](0045-quantity-cards.md)                 | Quantity cards: 0 / 1 / 2 / 3 / 5 / 10 / ALL / NONE     | 0042, 0047 |
-| [0046](0046-connector-cards.md)                | Connector cards: AND / OR / BUT / BECAUSE / IF / …      | 0042, 0047 |
-| [0047](0047-card-grammar.md)                   | Six-slot grammar — how primitives compose into events    | 0042–0046  |
+| [0061](0061-deprecate-card-grammar.md)         | Deprecate the grammar layer; rationale + replacement plan | supersedes 0042–0047 |
+| [0062](0062-pulse-polls.md)                    | Pulse polls — 3-sec synchronised group vote with fireworks | 0016, 0067 |
+| [0063](0063-reaction-wave.md)                  | Reaction wave — emoji-style ambient bubbles on `/project` | 0017, 0067 |
+| [0064](0064-tournament-cards.md)               | Tournament bracket — head-to-head rapid choices            | 0067       |
+| [0065](0065-quick-rank.md)                     | Quick-rank — drop priority cards on the floor in order     | 0003, 0067 |
+| [0066](0066-idea-drop-and-upvote.md)           | Idea drop + upvote — generate, balloon, vote, adopt        | 0067       |
+| [0067](0067-activation-kit-budget.md)          | Activation kit budget — how the 96 IDs get spent           | 0042 (replacement allocation) |
 
 ## Limits & degradation — what the system actually does at the edges
 

@@ -1,7 +1,7 @@
 # ADR 0047 — Card grammar: how primitives compose
 
 ## Status
-Proposed (depends on ADRs 0042–0046; supersedes the *event-shape* portion of ADR 0022).
+**Superseded by ADR 0061.** Six-slot sentence parsing is the wrong cognitive frame for a live workshop. Abandoned.
 
 ## Context
 ADRs 0023–0029 give the kit **specific cards** (atom-level meaning). ADRs 0043–0046 give the kit **primitive cards** (modifier, subject, quantity, connector). Together that's a *vocabulary*. What's missing is the *grammar*: a rule for how multiple cards co-raised by one or more participants compose into a single, parseable, archivable event.

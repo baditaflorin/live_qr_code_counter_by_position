@@ -1,7 +1,7 @@
 # ADR 0046 — Connector cards: logical primitives
 
 ## Status
-Proposed (depends on ADR 0042, 0047 grammar).
+**Superseded by ADR 0061.** AND/OR/BUT joining clauses is for writing prose, not for running a workshop. Abandoned.
 
 ## Context
 ADRs 0043–0045 introduce *qualifier*, *subject*, and *quantity* primitives. Each modifies a single atom card. To say more — *"I am tender **and** I want to speak"*, *"yes **but** also unsure"*, *"speak now **or** never"* — the kit needs the connectives that join clauses.

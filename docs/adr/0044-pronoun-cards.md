@@ -1,7 +1,7 @@
 # ADR 0044 — Pronoun & pointer cards: subject primitives
 
 ## Status
-Proposed (depends on ADR 0042, 0047 grammar).
+**Superseded by ADR 0061.** Sentence-construction model abandoned. Replaced by ADRs 0062–0066.
 
 ## Context
 Card events today have an implicit subject — *the holder*. `INTENT_SPEAK` raised by Anna means "Anna wants to speak". `WITNESS` raised by Anna pointing at Bob means "Anna witnesses Bob". The system infers subject from holder and (for witness) target from direction.
