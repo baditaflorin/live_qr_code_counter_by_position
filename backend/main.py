@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from . import detection, markers as marker_gen, tracking as tracking_mod
+from . import badges as badge_gen, detection, markers as marker_gen, tracking as tracking_mod
 from .db import (
     Marker, Person, Question, TrackingSample, TrackingSession, Vote, Zone,
     get_db, init_db,
@@ -219,6 +219,73 @@ def marker_image(aruco_id: int, db: Session = Depends(get_db)):
             f"Delete it or switch dictionaries.",
         )
     png = marker_gen.render_marker_png(aruco_id)
+    return Response(content=png, media_type="image/png")
+
+
+@app.get("/api/badge-styles")
+def badge_styles():
+    """Catalog of available badge templates / palettes / cell ornaments / generative frames."""
+    return {
+        "templates": ["default", "czocha", "craft"],
+        "palettes": [
+            {
+                "name": p.name,
+                "ink": "#%02x%02x%02x" % p.ink,
+                "paper": "#%02x%02x%02x" % p.paper,
+                "accent": "#%02x%02x%02x" % p.accent,
+                "contrast_ratio": round(p.contrast_ratio(), 2),
+            }
+            for p in badge_gen.PALETTES.values()
+        ],
+        "cell_styles": list(badge_gen.CELL_STYLES),
+        "cell_min_px": badge_gen.CELL_MIN_PX_PER_SIDE,
+        "frames": list(badge_gen.FRAME_GENERATORS.keys()),
+    }
+
+
+@app.get("/api/markers/{aruco_id}/badge")
+def marker_badge(
+    aruco_id: int,
+    template: str = "default",
+    palette: str = "default",
+    cell_style: str = "square",
+    frame: str = "none",
+    sigil: Optional[str] = None,
+    width: int = 800,
+    height: int = 1000,
+    verify: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Render a styled badge for the given marker. Returns a PNG.
+
+    Implements ADRs 0068 (composition) + 0069 (cell ornament) + 0070 (palette)
+    + 0071 (generative frame). The marker stays detectable regardless of style.
+    """
+    m = db.get(Marker, aruco_id)
+    if not m:
+        raise HTTPException(404, "Marker not found")
+    if aruco_id >= detection.dictionary_size():
+        raise HTTPException(409, f"Marker id {aruco_id} is outside dictionary {detection.get_dictionary_name()}.")
+
+    name = m.person.name if m.person else ""
+    opts = badge_gen.BadgeOptions(
+        template=template,
+        palette=palette,
+        cell_style=cell_style,
+        frame=frame,
+        sigil=sigil,
+        badge_w=max(200, min(width, 2000)),
+        badge_h=max(200, min(height, 2400)),
+    )
+
+    try:
+        if verify:
+            result = badge_gen.verify_detection(aruco_id, opts)
+            if not result["ok"]:
+                raise HTTPException(409, f"Detection verification failed: {result}")
+        png = badge_gen.render_badge_png(aruco_id, name, opts)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return Response(content=png, media_type="image/png")
 
 
