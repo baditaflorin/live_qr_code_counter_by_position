@@ -251,8 +251,8 @@ def marker_badge(
     cell_style: str = "square",
     frame: str = "none",
     sigil: Optional[str] = None,
-    width: int = 800,
-    height: int = 1000,
+    width: int = 1000,
+    height: int = 1300,
     verify: bool = False,
     db: Session = Depends(get_db),
 ):

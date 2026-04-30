@@ -423,113 +423,251 @@ def _bg_watermark_frame(canvas: Image.Image, palette: Palette, seed: int, frame_
 
 def _motif_heraldic_scroll(canvas: Image.Image, opts: BadgeOptions, palette: Palette,
                            marker_box: tuple, name: str) -> None:
-    """A banner / ribbon below the marker carrying the name; flourishes wrap up
-    around the marker like a coat-of-arms crest."""
+    """Full heraldic shield: laurel wreath ringing the marker, crown above,
+    banner below carrying the name, ornamental corner fleurs. The marker reads
+    as the *crest* of a coat of arms — small inside an illustrated scene."""
     draw = ImageDraw.Draw(canvas)
     mx0, my0, mx1, my1 = marker_box
-    cx = (mx0 + mx1) / 2
+    cx_m = (mx0 + mx1) / 2
+    cy_m = (my0 + my1) / 2
     w, h = canvas.size
 
-    # Two diagonal flourishes drawn outward from the bottom corners of the marker.
+    # 1. Laurel wreath ringing the marker. Two arcs of leaves on left and right.
+    wreath_r = (mx1 - mx0) * 0.85
+    leaf_count = 9
     for sign in (-1, 1):
-        sx = mx0 if sign < 0 else mx1
-        sy = my1
-        # Spline-ish path drawn as connected line segments.
-        pts = []
-        for t in [i / 30 for i in range(31)]:
-            px = sx + sign * t * (w * 0.32) * (1 - 0.4 * t)
-            py = sy + t * (h * 0.05) - (math.sin(t * math.pi) * h * 0.04)
-            pts.append((px, py))
-        draw.line(pts, fill=palette.accent, width=3)
-        # Curl at the tip.
-        tx, ty = pts[-1]
-        for r in (8, 5, 3):
-            draw.ellipse([(tx - r, ty - r), (tx + r, ty + r)], outline=palette.accent, width=2)
+        for i in range(leaf_count):
+            # Arc from bottom (-pi/2 - 0.6) up to top (-pi/2 + 0.6) on each side.
+            t = i / (leaf_count - 1)
+            angle = math.pi * (0.5 + sign * (0.55 - t * 1.1))
+            lx = cx_m + wreath_r * math.cos(angle)
+            ly = cy_m + wreath_r * math.sin(angle)
+            # Each leaf is a tilted oval, pointing tangent to the wreath circle.
+            tilt_deg = -math.degrees(angle) - sign * 90 + 90
+            leaf_size = 38
+            leaf = Image.new("RGBA", (leaf_size, int(leaf_size * 0.45)), (0, 0, 0, 0))
+            ld = ImageDraw.Draw(leaf)
+            ld.ellipse([(0, 0), (leaf_size - 1, int(leaf_size * 0.45) - 1)],
+                       fill=palette.accent + (255,))
+            ld.line([(2, leaf_size * 0.225), (leaf_size - 3, leaf_size * 0.225)],
+                    fill=palette.ink + (255,), width=1)
+            leaf = leaf.rotate(tilt_deg, expand=True, resample=Image.BICUBIC)
+            canvas.paste(leaf, (int(lx - leaf.width / 2), int(ly - leaf.height / 2)), leaf)
+        # Subtle arc line through the leaves.
+        for i in range(20):
+            t = i / 19
+            a = math.pi * (0.5 + sign * (0.55 - t * 1.1))
+            ax = cx_m + wreath_r * math.cos(a)
+            ay = cy_m + wreath_r * math.sin(a)
+            draw.ellipse([(ax - 1, ay - 1), (ax + 1, ay + 1)], fill=palette.accent)
 
-    # Banner ribbon below the marker — a tilted parallelogram with a notch.
-    band_y = my1 + int(h * 0.06)
-    band_h = int(h * 0.10)
+    # 2. Crown above the marker — three points + base.
+    crown_w = (mx1 - mx0) * 0.85
+    crown_h = (my1 - my0) * 0.22
+    crown_y = my0 - crown_h - 8
+    crown_x0 = cx_m - crown_w / 2
+    crown_x1 = cx_m + crown_w / 2
+    pts = [
+        (crown_x0, crown_y + crown_h),
+        (crown_x0 + crown_w * 0.10, crown_y + crown_h * 0.20),
+        (crown_x0 + crown_w * 0.30, crown_y + crown_h * 0.65),
+        (crown_x0 + crown_w * 0.50, crown_y + crown_h * 0.05),
+        (crown_x0 + crown_w * 0.70, crown_y + crown_h * 0.65),
+        (crown_x0 + crown_w * 0.90, crown_y + crown_h * 0.20),
+        (crown_x1, crown_y + crown_h),
+    ]
+    draw.polygon(pts, fill=palette.accent, outline=palette.ink)
+    # Three small jewels.
+    for jx in (crown_x0 + crown_w * 0.10, cx_m, crown_x1 - crown_w * 0.10):
+        draw.ellipse([(jx - 6, crown_y + crown_h * 0.30 - 6),
+                      (jx + 6, crown_y + crown_h * 0.30 + 6)], fill=palette.ink)
+
+    # 3. Banner ribbon below the marker — wide, with carved ends + pennant tails.
+    band_y = my1 + int(wreath_r * 0.25) + 10
+    band_h = int(h * 0.11)
     band_x0 = int(w * 0.08)
     band_x1 = int(w * 0.92)
-    notch = 24
+    notch = 32
+    pennant_drop = 18
     pts = [
-        (band_x0, band_y + 6),
-        (band_x0 + notch, band_y),
-        (band_x1 - notch, band_y),
-        (band_x1, band_y + 6),
-        (band_x1 - notch, band_y + band_h),
-        (band_x0 + notch, band_y + band_h),
+        (band_x0 + 16, band_y + pennant_drop // 2),
+        (band_x0, band_y),
+        (band_x0 + notch, band_y - 6),
+        (band_x1 - notch, band_y - 6),
+        (band_x1, band_y),
+        (band_x1 - 16, band_y + pennant_drop // 2),
+        (band_x1, band_y + band_h),
+        (band_x1 - notch, band_y + band_h + pennant_drop),
+        (band_x0 + notch, band_y + band_h + pennant_drop),
+        (band_x0, band_y + band_h),
     ]
     draw.polygon(pts, fill=palette.ink, outline=palette.accent)
+    # Inner accent line.
+    for x_pad, y_pad in ((10, 8),):
+        draw.line([(band_x0 + x_pad, band_y + y_pad), (band_x1 - x_pad, band_y + y_pad)],
+                  fill=palette.accent, width=1)
+        draw.line([(band_x0 + x_pad, band_y + band_h - y_pad), (band_x1 - x_pad, band_y + band_h - y_pad)],
+                  fill=palette.accent, width=1)
 
-    # Name set on the ribbon, paper-coloured.
+    # Name on the ribbon, paper-coloured, prominent.
     if name:
         font = _load_font(int(band_h * 0.55))
         line = name if len(name) < 26 else name[:25] + "…"
         bbox = draw.textbbox((0, 0), line, font=font)
-        tw = bbox[2] - bbox[0]
-        ty = band_y + (band_h - (bbox[3] - bbox[1])) // 2 - 4
-        draw.text((cx - tw / 2, ty), line, fill=palette.paper, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        ty = band_y + (band_h - th) // 2 - 4
+        draw.text((cx_m - tw / 2, ty), line, fill=palette.paper, font=font)
+
+    # 4. Corner fleurs — small ornament at each badge corner.
+    for cx, cy in [(50, 50), (w - 50, 50), (50, h - 50), (w - 50, h - 50)]:
+        # Three-petal fleur-de-lis-ish mark.
+        for a in (-math.pi / 2, -math.pi / 2 + math.pi * 0.45, -math.pi / 2 - math.pi * 0.45):
+            tx = cx + 12 * math.cos(a)
+            ty = cy + 12 * math.sin(a)
+            draw.ellipse([(tx - 4, ty - 4), (tx + 4, ty + 4)], fill=palette.accent)
+        draw.ellipse([(cx - 3, cy - 3), (cx + 3, cy + 3)], fill=palette.ink)
 
 
 def _motif_botanical_vines(canvas: Image.Image, opts: BadgeOptions, palette: Palette,
                            marker_box: tuple, name: str) -> None:
-    """Curling vine shapes growing inward from the bottom corners, leaves
-    along the way. Marker sits like a stone among them."""
+    """A circular wreath of leaves around the marker, plus vines growing
+    up from the bottom corners with leaves and small flowers. The marker
+    sits like a stone in a garden, not as the subject of the badge."""
     draw = ImageDraw.Draw(canvas)
     w, h = canvas.size
     mx0, my0, mx1, my1 = marker_box
+    cx_m = (mx0 + mx1) / 2
+    cy_m = (my0 + my1) / 2
     rng = _seeded_rng(opts.badge_w * 7919 + opts.badge_h, "vines")
 
+    # 1. Wreath ringing the marker — leaves placed along a circle around it.
+    wreath_r = max(mx1 - mx0, my1 - my0) * 0.78
+    n_leaves = 28
+    for i in range(n_leaves):
+        angle = -math.pi / 2 + 2 * math.pi * i / n_leaves
+        # Skip the top arc so the marker has a "view" upward (looks more like a wreath
+        # than a closed circle).
+        if -math.pi * 0.85 < angle < -math.pi * 0.15:
+            continue
+        lx = cx_m + wreath_r * math.cos(angle)
+        ly = cy_m + wreath_r * math.sin(angle)
+        # Tangent-aligned leaf.
+        tilt_deg = -math.degrees(angle) - 90 + rng.uniform(-15, 15)
+        leaf_size = int(rng.uniform(38, 48))
+        leaf = Image.new("RGBA", (leaf_size, int(leaf_size * 0.42)), (0, 0, 0, 0))
+        ld = ImageDraw.Draw(leaf)
+        ld.ellipse([(0, 0), (leaf_size - 1, int(leaf_size * 0.42) - 1)],
+                   fill=palette.accent + (255,))
+        # Simple leaf vein.
+        ld.line([(3, leaf_size * 0.21), (leaf_size - 3, leaf_size * 0.21)],
+                fill=palette.ink + (255,), width=1)
+        leaf = leaf.rotate(tilt_deg, expand=True, resample=Image.BICUBIC)
+        canvas.paste(leaf, (int(lx - leaf.width / 2), int(ly - leaf.height / 2)), leaf)
+
+    # 2. Long vines climbing from the two bottom corners with multiple leaves.
     for side in (-1, 1):
-        sx = 30 if side < 0 else w - 30
-        sy = h - 30
-        # Vine path — Bezier-ish via line interp.
+        sx = 50 if side < 0 else w - 50
+        sy = h - 50
+        # Stronger vine path — sweeps inward and upward.
         pts = []
-        for t in [i / 40 for i in range(41)]:
-            tx = sx + side * (-1) * t * (w * 0.32) + math.sin(t * 7) * 18
-            ty = sy - t * (h * 0.55) + math.cos(t * 3) * 12
+        for t in [i / 60 for i in range(61)]:
+            tx = sx + side * (-1) * t * (w * 0.34) + math.sin(t * 5) * 22
+            ty = sy - t * (h * 0.65) + math.cos(t * 4) * 14
             pts.append((tx, ty))
-        draw.line(pts, fill=palette.accent, width=3)
-        # Leaves along the vine.
-        for i in range(4, len(pts), 6):
+        # Draw vine as 3 parallel strokes for a thicker organic look.
+        draw.line(pts, fill=palette.accent, width=4)
+        draw.line([(p[0] + 1, p[1] + 1) for p in pts], fill=palette.ink, width=1)
+        # Lots of leaves along the vine.
+        for i in range(6, len(pts), 5):
             px, py = pts[i]
-            leaf_dx = side * 14 + rng.uniform(-4, 4)
-            leaf_dy = -10 + rng.uniform(-4, 4)
-            ex0, ey0 = px - 12, py - 6
-            ex1, ey1 = px + 12, py + 6
-            # Tilted leaf shape via two arcs.
-            tilt = math.atan2(leaf_dy, leaf_dx) * 180 / math.pi
-            leaf = Image.new("RGBA", (40, 24), (0, 0, 0, 0))
+            leaf_size = int(rng.uniform(28, 42))
+            leaf_h = int(leaf_size * 0.42)
+            leaf = Image.new("RGBA", (leaf_size, leaf_h), (0, 0, 0, 0))
             ld = ImageDraw.Draw(leaf)
-            ld.chord([(0, 0), (40, 24)], 30, 150, fill=palette.accent + (255,))
-            ld.chord([(0, 0), (40, 24)], 210, 330, fill=palette.accent + (255,))
-            leaf = leaf.rotate(-tilt, expand=True)
-            canvas.paste(leaf, (int(px - leaf.width / 2 + leaf_dx),
-                                int(py - leaf.height / 2 + leaf_dy)), leaf)
+            ld.ellipse([(0, 0), (leaf_size - 1, leaf_h - 1)], fill=palette.accent + (255,))
+            ld.line([(3, leaf_h // 2), (leaf_size - 3, leaf_h // 2)], fill=palette.ink + (255,), width=1)
+            tilt = side * 60 + rng.uniform(-30, 30)
+            leaf = leaf.rotate(tilt, expand=True, resample=Image.BICUBIC)
+            offset_dx = side * int(leaf.width * 0.4)
+            canvas.paste(leaf, (int(px - leaf.width / 2 + offset_dx),
+                                int(py - leaf.height / 2)), leaf)
+        # Small flowers near the top of each vine.
+        for i in (len(pts) - 5, len(pts) - 15):
+            if i < 0:
+                continue
+            fx, fy = pts[i]
+            for petal_a in [k * math.pi / 3 for k in range(6)]:
+                ppx = fx + 9 * math.cos(petal_a)
+                ppy = fy + 9 * math.sin(petal_a)
+                draw.ellipse([(ppx - 5, ppy - 5), (ppx + 5, ppy + 5)],
+                             fill=palette.paper, outline=palette.accent)
+            draw.ellipse([(fx - 4, fy - 4), (fx + 4, fy + 4)], fill=palette.accent)
 
 
 def _motif_postage_perforation(canvas: Image.Image, opts: BadgeOptions, palette: Palette,
                                marker_box: tuple, name: str) -> None:
-    """Scalloped 'perforated' edge characteristic of a postage stamp."""
+    """Postage-stamp aesthetic — scalloped perforated edge, marginal text,
+    a denomination cartouche, decorative cross-hatched fill in the body."""
     draw = ImageDraw.Draw(canvas)
     w, h = canvas.size
-    teeth_dia = 22
-    step = 36
-    # Top + bottom row.
+    mx0, my0, mx1, my1 = marker_box
+
+    # 1. Cross-hatch background in the body of the stamp (not over the marker).
+    hatch_step = 12
+    inset = 50
+    for d in range(-h, w, hatch_step):
+        draw.line([(d, inset), (d + h, inset + h)], fill=palette.accent, width=1)
+    # Erase hatching over the marker quiet zone.
+    quiet_pad = 16
+    draw.rectangle([(mx0 - quiet_pad, my0 - quiet_pad),
+                    (mx1 + quiet_pad, my1 + quiet_pad)], fill=palette.paper)
+
+    # 2. Perforated edge — paper-coloured circles eating into the boundary.
+    teeth_dia = 26
+    step = 40
     for x in range(step // 2, w, step):
         draw.ellipse([(x - teeth_dia / 2, -teeth_dia / 2),
                       (x + teeth_dia / 2, teeth_dia / 2)], fill=palette.paper)
         draw.ellipse([(x - teeth_dia / 2, h - teeth_dia / 2),
                       (x + teeth_dia / 2, h + teeth_dia / 2)], fill=palette.paper)
-    # Sides.
     for y in range(step // 2, h, step):
         draw.ellipse([(-teeth_dia / 2, y - teeth_dia / 2),
                       (teeth_dia / 2, y + teeth_dia / 2)], fill=palette.paper)
         draw.ellipse([(w - teeth_dia / 2, y - teeth_dia / 2),
                       (w + teeth_dia / 2, y + teeth_dia / 2)], fill=palette.paper)
-    # Inner border line for stamp feel.
-    draw.rectangle([(28, 28), (w - 28, h - 28)], outline=palette.accent, width=2)
+
+    # 3. Inner border framing the stamp body.
+    draw.rectangle([(36, 36), (w - 36, h - 36)], outline=palette.ink, width=3)
+    draw.rectangle([(44, 44), (w - 44, h - 44)], outline=palette.accent, width=1)
+
+    # 4. Marginal text — top and bottom inscriptions.
+    margin_font = _load_font(int(h * 0.028))
+    top_text = "  ·  ".join(["WEMESHUP", "CZOCHA", "WITNESS"])
+    bbox = draw.textbbox((0, 0), top_text, font=margin_font)
+    tw = bbox[2] - bbox[0]
+    draw.text(((w - tw) / 2, 60), top_text, fill=palette.ink, font=margin_font)
+
+    if name:
+        bottom_font = _load_font(int(h * 0.05))
+        line = name if len(name) < 22 else name[:21] + "…"
+        bbox = draw.textbbox((0, 0), line, font=bottom_font)
+        tw = bbox[2] - bbox[0]
+        draw.text(((w - tw) / 2, h - 130), line, fill=palette.ink, font=bottom_font)
+
+    # 5. Denomination cartouche in the lower-right — a small medallion.
+    den_cx, den_cy = w - 110, h - 200
+    den_r = 50
+    draw.ellipse([(den_cx - den_r, den_cy - den_r), (den_cx + den_r, den_cy + den_r)],
+                 fill=palette.ink, outline=palette.accent, width=2)
+    draw.ellipse([(den_cx - den_r + 8, den_cy - den_r + 8),
+                  (den_cx + den_r - 8, den_cy + den_r - 8)],
+                 outline=palette.accent, width=1)
+    val_font = _load_font(36)
+    val_text = "I"  # "first" — generic Roman one
+    bbox = draw.textbbox((0, 0), val_text, font=val_font)
+    tw_v, th_v = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text((den_cx - tw_v / 2, den_cy - th_v / 2 - 4), val_text,
+              fill=palette.paper, font=val_font)
 
 
 # ---------- per-template layout ----------
