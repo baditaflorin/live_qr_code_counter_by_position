@@ -55,6 +55,7 @@ let didDrag = false;
 
 // ---------- constants ----------
 const VERTEX_HIT_PX = 12;
+const MIDPOINT_HIT_PX = 9;
 const CLICK_THRESHOLD_PX = 5;
 
 // ---------- formation filter ----------
@@ -139,6 +140,21 @@ function vertexHit(x, y) {
   return -1;
 }
 
+function midpointHit(x, y) {
+  // Returns the index at which a new vertex should be inserted (between
+  // edge i and edge i+1, i.e. inside drawingPoints at position i+1), or -1.
+  if (drawingPoints.length < 2) return -1;
+  for (let i = 0; i < drawingPoints.length; i++) {
+    const j = (i + 1) % drawingPoints.length;
+    const [ax, ay] = normToPx(...drawingPoints[i]);
+    const [bx, by] = normToPx(...drawingPoints[j]);
+    const mx = (ax + bx) / 2;
+    const my = (ay + by) / 2;
+    if (Math.hypot(mx - x, my - y) <= MIDPOINT_HIT_PX) return j;
+  }
+  return -1;
+}
+
 function zoneHit(x, y) {
   const [nx, ny] = pxToNorm(x, y);
   const visible = visibleZones();
@@ -172,21 +188,47 @@ function onDown(ev) {
       // actually drag shouldn't pollute the undo stack.
       drag = { index: vIdx, snapshotPushed: false };
     }
+    return;
+  }
+
+  // Mid-edge "+" handle: insert a new vertex on that edge and immediately
+  // start dragging it, so the user can position it precisely without a
+  // second click.
+  const mIdx = midpointHit(x, y);
+  if (mIdx >= 0) {
+    pushUndo();
+    drawingPoints.splice(mIdx, 0, pxToNorm(x, y));
+    drag = { index: mIdx, snapshotPushed: true };
+    mouseDownPx = null;
+    redrawCanvas();
+    return;
   }
 }
 
 function onMove(ev) {
-  if (!drag) return;
   const r = zDraw.getBoundingClientRect();
   const x = ev.clientX - r.left;
   const y = ev.clientY - r.top;
-  if (!drag.snapshotPushed) {
-    pushUndo();
-    drag.snapshotPushed = true;
+
+  if (drag) {
+    if (!drag.snapshotPushed) {
+      pushUndo();
+      drag.snapshotPushed = true;
+    }
+    drawingPoints[drag.index] = pxToNorm(x, y);
+    didDrag = true;
+    zDraw.style.cursor = "grabbing";
+    redrawCanvas();
+    return;
   }
-  drawingPoints[drag.index] = pxToNorm(x, y);
-  didDrag = true;
-  redrawCanvas();
+
+  // No drag in progress — set cursor based on what's under it so the user
+  // can tell at a glance whether a click will move, insert, or select.
+  let cursor = "crosshair";
+  if (vertexHit(x, y) >= 0) cursor = "grab";
+  else if (midpointHit(x, y) >= 0) cursor = "copy";
+  else if (zoneHit(x, y)) cursor = "pointer";
+  zDraw.style.cursor = cursor;
 }
 
 function onUp(ev) {
@@ -290,6 +332,37 @@ function drawWipPolygon(ctx, w, h) {
     ctx.fillStyle = hexToRgba(color, 0.25);
     ctx.fill();
   }
+  // Mid-edge "+" handles — drawn first so vertex handles paint on top.
+  if (drawingPoints.length >= 2) {
+    for (let i = 0; i < drawingPoints.length; i++) {
+      const j = (i + 1) % drawingPoints.length;
+      // Skip the closing edge if the polygon isn't closed yet (less than 3 pts).
+      if (drawingPoints.length < 3 && j === 0) continue;
+      const ax = drawingPoints[i][0] * w;
+      const ay = drawingPoints[i][1] * h;
+      const bx = drawingPoints[j][0] * w;
+      const by = drawingPoints[j][1] * h;
+      const mx = (ax + bx) / 2;
+      const my = (ay + by) / 2;
+      // Faint disc with a "+" to communicate "click to add a vertex here."
+      ctx.beginPath();
+      ctx.arc(mx, my, 7, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(mx - 3, my);
+      ctx.lineTo(mx + 3, my);
+      ctx.moveTo(mx, my - 3);
+      ctx.lineTo(mx, my + 3);
+      ctx.stroke();
+    }
+  }
+
   // Vertex handles.
   drawingPoints.forEach(([x, y]) => {
     ctx.fillStyle = "#fff";
