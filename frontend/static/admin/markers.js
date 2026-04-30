@@ -42,6 +42,10 @@ function makeCard(m) {
   });
   actions.appendChild(el("label", { style: { fontSize: "12px" } }, cb, " select"));
   actions.appendChild(el("button", {
+    title: "Preview a styled badge",
+    onclick: () => badgeDialog(m),
+  }, "🎨"));
+  actions.appendChild(el("button", {
     title: "Show QR for opening this marker on a phone",
     onclick: () => phoneShareDialog(m),
   }, "📱"));
@@ -91,6 +95,120 @@ function phoneShareDialog(m) {
   dlg.addEventListener("close", () => dlg.remove());
   document.body.appendChild(dlg);
   dlg.showModal();
+}
+
+// ---------- badge designer dialog ----------
+let _badgeStylesCache = null;
+async function loadBadgeStyles() {
+  if (_badgeStylesCache) return _badgeStylesCache;
+  _badgeStylesCache = await api("/api/badge-styles");
+  return _badgeStylesCache;
+}
+
+async function badgeDialog(m) {
+  const styles = await loadBadgeStyles();
+  const dlg = document.createElement("dialog");
+  dlg.style.maxWidth = "880px";
+  dlg.style.width = "880px";
+  dlg.innerHTML = `
+    <h3 style="margin-top:0;">Badge designer — marker #${m.aruco_id}</h3>
+    <p class="muted" style="margin: 4px 0 12px;">
+      Stack a template, a palette, a cell ornament, and a generative frame.
+      Detection is verified before rendering — combinations that would break the marker are rejected.
+    </p>
+    <div style="display:grid; grid-template-columns: 1fr 360px; gap: 16px;">
+      <div style="background:white; border-radius: 8px; padding: 8px; min-height: 480px; display:flex; align-items:center; justify-content:center;">
+        <img id="badge-preview" style="max-width:100%; max-height:600px;" />
+      </div>
+      <div style="display:flex; flex-direction:column; gap: 10px;">
+        <label>Template
+          <select id="bd-template"></select>
+        </label>
+        <label>Palette
+          <select id="bd-palette"></select>
+        </label>
+        <div id="bd-palette-swatch" style="display:flex; gap:4px; height:18px; border-radius:4px; overflow:hidden;"></div>
+        <label>Cell ornament
+          <select id="bd-cell"></select>
+        </label>
+        <label>Generative frame
+          <select id="bd-frame"></select>
+        </label>
+        <label>Sigil (corner emoji / initials, optional)
+          <input id="bd-sigil" type="text" maxlength="6" placeholder="e.g. ⚜︎" />
+        </label>
+        <div class="muted" style="font-size:12px;" id="bd-status"></div>
+        <div style="display:flex; gap:8px; margin-top:8px;">
+          <button id="bd-download">Download PNG</button>
+          <span style="flex:1"></span>
+          <button id="bd-close" class="primary">Done</button>
+        </div>
+        <div class="muted" style="font-size:11px; word-break:break-all;" id="bd-url"></div>
+      </div>
+    </div>
+  `;
+
+  const $ = (sel) => dlg.querySelector(sel);
+  const tmpl = $("#bd-template");
+  const pal = $("#bd-palette");
+  const cell = $("#bd-cell");
+  const frame = $("#bd-frame");
+  const sigil = $("#bd-sigil");
+  const swatch = $("#bd-palette-swatch");
+  const preview = $("#badge-preview");
+  const status = $("#bd-status");
+  const urlEl = $("#bd-url");
+
+  styles.templates.forEach((t) => tmpl.appendChild(el("option", { value: t }, t)));
+  styles.palettes.forEach((p) => pal.appendChild(el("option", { value: p.name }, `${p.name}  (${p.contrast_ratio}:1)`)));
+  styles.cell_styles.forEach((c) => {
+    const min_px = styles.cell_min_px?.[c];
+    cell.appendChild(el("option", { value: c }, min_px ? `${c}  (≥${min_px}px)` : c));
+  });
+  styles.frames.forEach((f) => frame.appendChild(el("option", { value: f }, f)));
+
+  function refresh() {
+    const params = new URLSearchParams({
+      template: tmpl.value,
+      palette: pal.value,
+      cell_style: cell.value,
+      frame: frame.value,
+      sigil: sigil.value,
+    });
+    const url = `/api/markers/${m.aruco_id}/badge?${params}`;
+    preview.src = url + "&_t=" + Date.now();  // bust browser cache on parameter change
+    urlEl.textContent = url;
+    // Swatch
+    const p = styles.palettes.find((x) => x.name === pal.value);
+    if (p) {
+      swatch.innerHTML = "";
+      [p.paper, p.ink, p.accent].forEach((c) => {
+        const div = document.createElement("div");
+        div.style.flex = "1"; div.style.background = c;
+        swatch.appendChild(div);
+      });
+    }
+  }
+
+  preview.addEventListener("load", () => { status.textContent = `Detection-verified ✓`; });
+  preview.addEventListener("error", async () => {
+    // Fetch detail
+    try {
+      const r = await fetch(preview.src.replace(/&?_t=\d+/, "") + "&verify=true");
+      const j = await r.json();
+      status.textContent = "⚠️ " + (j.detail || `HTTP ${r.status}`);
+    } catch { status.textContent = "⚠️ render failed"; }
+  });
+
+  [tmpl, pal, cell, frame, sigil].forEach((e) => e.addEventListener("change", refresh));
+  sigil.addEventListener("input", refresh);
+
+  $("#bd-download").addEventListener("click", () => window.open(preview.src.replace(/&?_t=\d+/, ""), "_blank"));
+  $("#bd-close").addEventListener("click", () => dlg.close());
+  dlg.addEventListener("close", () => dlg.remove());
+  document.body.appendChild(dlg);
+  dlg.showModal();
+  refresh();
 }
 
 async function assignDialog(m) {
