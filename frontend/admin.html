@@ -98,7 +98,7 @@
       </div>
     </div>
     <div class="panel">
-      <h3 style="margin-top:0;">Draw a new zone</h3>
+      <h3 style="margin-top:0;">Draw &amp; edit zones</h3>
       <div class="row" style="margin-bottom: 8px;">
         <input id="zone-name" type="text" placeholder="Internal name (e.g. left-area)" />
         <input id="zone-label" type="text" placeholder="Display label (e.g. Yes)" />
@@ -112,10 +112,15 @@
           <option value="privilege_walk">privilege_walk</option>
         </select>
         <input id="zone-color" type="color" value="#22c55e" />
-        <button id="zone-undo">Undo point</button>
-        <button id="zone-clear">Clear</button>
+        <button id="zone-undo" title="Cmd-Z / Ctrl-Z">↶ Undo</button>
+        <button id="zone-redo" title="Cmd-Shift-Z / Ctrl-Y">↷ Redo</button>
+        <button id="zone-new" title="Start a fresh polygon">＋ New zone</button>
         <button id="zone-save" class="primary">Save zone</button>
-        <span class="muted">Click on the video to add polygon points; need at least 3.</span>
+      </div>
+      <div class="muted" style="font-size: 12px; line-height: 1.6;">
+        <strong>Click a zone</strong> on the camera to edit it · <strong>drag a handle</strong> to move a vertex ·
+        <strong>shift-click a handle</strong> to delete it · <strong>click empty space</strong> to add a vertex ·
+        <strong>Esc</strong> deselects · locked zones can't be edited until you unlock them in the list below.
       </div>
       <div class="zone-canvas-wrap" id="zone-stage">
         <video id="z-video" autoplay playsinline muted></video>
@@ -165,6 +170,6 @@
     </div>
   </section>
 </main>
-<script type="module" src="/static/admin.js"></script>
+<script type="module" src="/static/admin/main.js"></script>
 </body>
 </html>

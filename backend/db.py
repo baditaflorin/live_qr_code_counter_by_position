@@ -53,6 +53,7 @@ class Zone(Base):
     color: Mapped[str] = mapped_column(String(20), nullable=False, default="#22c55e")
     polygon: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list of [x,y] in 0..1
     formation: Mapped[Optional[str]] = mapped_column(String(40), index=True)
+    locked: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     def points(self) -> list[list[float]]:
@@ -105,6 +106,7 @@ def _migrate_questions() -> None:
     }
     z_needed = {
         "formation": "ALTER TABLE zones ADD COLUMN formation VARCHAR(40)",
+        "locked":    "ALTER TABLE zones ADD COLUMN locked INTEGER DEFAULT 0",
     }
     with engine.begin() as conn:
         q_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(questions)").all()}

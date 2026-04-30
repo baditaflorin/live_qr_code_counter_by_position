@@ -23,7 +23,7 @@ from .db import (
 )
 from .schemas import (
     MarkerAssign, MarkerCreateBatch, MarkerOut, PersonIn, PersonOut, QuestionBulkIn,
-    QuestionIn, QuestionOut, VoteOut, ZoneIn, ZoneOut,
+    QuestionIn, QuestionOut, VoteOut, ZoneIn, ZoneOut, ZonePatch,
 )
 from .seeds.czocha_day1 import as_records as _czocha_day1_records
 from .seeds.default_zones import records_for as _default_zones_records, DEFAULTS_BY_FORMATION
@@ -66,6 +66,7 @@ def _zone_to_out(z: Zone) -> ZoneOut:
         color=z.color,
         polygon=z.points(),
         formation=z.formation,
+        locked=bool(z.locked),
         created_at=z.created_at,
     )
 
@@ -283,6 +284,7 @@ def create_zone(payload: ZoneIn, db: Session = Depends(get_db)):
         color=payload.color,
         polygon=json.dumps(payload.polygon),
         formation=(payload.formation or None),
+        locked=1 if payload.locked else 0,
     )
     db.add(z)
     db.commit()
@@ -295,6 +297,8 @@ def update_zone(zone_id: int, payload: ZoneIn, db: Session = Depends(get_db)):
     z = db.get(Zone, zone_id)
     if not z:
         raise HTTPException(404, "Zone not found")
+    if z.locked:
+        raise HTTPException(409, "Zone is locked. Unlock it before editing.")
     if len(payload.polygon) < 3:
         raise HTTPException(400, "Polygon needs at least 3 points")
     z.name = payload.name.strip() or "Zone"
@@ -302,6 +306,33 @@ def update_zone(zone_id: int, payload: ZoneIn, db: Session = Depends(get_db)):
     z.color = payload.color
     z.polygon = json.dumps(payload.polygon)
     z.formation = payload.formation or None
+    z.locked = 1 if payload.locked else 0
+    db.commit()
+    db.refresh(z)
+    return _zone_to_out(z)
+
+
+@app.patch("/api/zones/{zone_id}", response_model=ZoneOut)
+def patch_zone(zone_id: int, payload: ZonePatch, db: Session = Depends(get_db)):
+    """Partial update — primarily for the lock toggle from the zones list.
+
+    Polygon edits go through PUT (and respect the lock); this endpoint lets
+    you flip `locked` on a zone that is currently locked, and tweak metadata
+    fields without re-uploading the whole polygon.
+    """
+    z = db.get(Zone, zone_id)
+    if not z:
+        raise HTTPException(404, "Zone not found")
+    if payload.locked is not None:
+        z.locked = 1 if payload.locked else 0
+    if payload.name is not None:
+        z.name = payload.name.strip() or z.name
+    if payload.label is not None:
+        z.label = payload.label.strip()
+    if payload.color is not None:
+        z.color = payload.color
+    if payload.formation is not None:
+        z.formation = payload.formation or None
     db.commit()
     db.refresh(z)
     return _zone_to_out(z)

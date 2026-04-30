@@ -43,6 +43,7 @@ class ZoneIn(BaseModel):
     color: str = "#22c55e"
     polygon: list[list[float]]  # [[x,y], ...] normalized 0..1
     formation: Optional[str] = None
+    locked: bool = False
 
 
 class ZoneOut(BaseModel):
@@ -52,7 +53,16 @@ class ZoneOut(BaseModel):
     color: str
     polygon: list[list[float]]
     formation: Optional[str] = None
+    locked: bool = False
     created_at: datetime
+
+
+class ZonePatch(BaseModel):
+    locked: Optional[bool] = None
+    name: Optional[str] = None
+    label: Optional[str] = None
+    color: Optional[str] = None
+    formation: Optional[str] = None
 
 
 class QuestionIn(BaseModel):
