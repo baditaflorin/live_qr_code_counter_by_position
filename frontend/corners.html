@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Floor-corner markers — tape on floor / hold in corners</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #fff;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #111;
+    overflow: hidden;
+  }
+  /* 2x2 grid that mirrors the floor layout: TL TR / BL BR */
+  #grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    width: 100%;
+    height: 100%;
+    gap: 6px;
+    padding: 6px;
+    background: #ddd;
+  }
+  .cell {
+    position: relative;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    padding: 6%;
+  }
+  .label {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    background: rgba(0,0,0,0.78);
+    color: #fff;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    pointer-events: none;
+  }
+  .id {
+    position: absolute;
+    bottom: 8px;
+    right: 10px;
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: 12px;
+    color: #555;
+    pointer-events: none;
+  }
+
+  /* Single-corner fullscreen mode */
+  body.solo #grid { display: none; }
+  body.solo #solo { display: flex; }
+  #solo {
+    display: none;
+    position: fixed; inset: 0;
+    background: #fff;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 14px;
+  }
+  #solo img {
+    flex: 1;
+    width: 100%;
+    object-fit: contain;
+  }
+  #solo .meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 10px 16px;
+    font-size: 14px;
+    color: #333;
+  }
+  #solo .meta button {
+    background: #111;
+    color: #fff;
+    border: 0;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  #hint {
+    position: fixed;
+    bottom: 14px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.62);
+    color: #fff;
+    font-size: 12.5px;
+    padding: 6px 14px;
+    border-radius: 20px;
+    pointer-events: none;
+    transition: opacity 0.5s;
+  }
+  body.solo #hint { display: none; }
+</style>
+</head>
+<body>
+<div id="grid">
+  <div class="cell" data-corner="tl">
+    <img alt="Top-left marker" src="/api/calibration/corner-marker/tl.png" />
+    <span class="label">TL · top-left</span>
+    <span class="id" data-id-for="tl"></span>
+  </div>
+  <div class="cell" data-corner="tr">
+    <img alt="Top-right marker" src="/api/calibration/corner-marker/tr.png" />
+    <span class="label">TR · top-right</span>
+    <span class="id" data-id-for="tr"></span>
+  </div>
+  <div class="cell" data-corner="bl">
+    <img alt="Bottom-left marker" src="/api/calibration/corner-marker/bl.png" />
+    <span class="label">BL · bottom-left</span>
+    <span class="id" data-id-for="bl"></span>
+  </div>
+  <div class="cell" data-corner="br">
+    <img alt="Bottom-right marker" src="/api/calibration/corner-marker/br.png" />
+    <span class="label">BR · bottom-right</span>
+    <span class="id" data-id-for="br"></span>
+  </div>
+</div>
+
+<div id="solo">
+  <div class="meta">
+    <span id="solo-label"></span>
+    <button id="solo-back" type="button">← back to all four</button>
+  </div>
+  <img id="solo-img" alt="" />
+</div>
+
+<div id="hint">Tap any corner to enlarge · keep this screen on</div>
+
+<script>
+  // Try to keep the screen awake while this page is open.
+  let wakeLock = null;
+  async function acquireWakeLock() {
+    if ("wakeLock" in navigator) {
+      try { wakeLock = await navigator.wakeLock.request("screen"); } catch (_) {}
+    }
+  }
+  acquireWakeLock();
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") acquireWakeLock();
+  });
+
+  // Hide the hint after 4 seconds.
+  setTimeout(() => {
+    const h = document.getElementById("hint");
+    if (h) h.style.opacity = "0";
+  }, 4000);
+
+  // Fetch the corner ids so we can label each cell with #<aruco_id>.
+  fetch("/api/calibration/corners")
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (!data || !data.corner_ids) return;
+      for (const name of ["tl", "tr", "br", "bl"]) {
+        const el = document.querySelector(`[data-id-for="${name}"]`);
+        if (el) el.textContent = "#" + data.corner_ids[name];
+      }
+    })
+    .catch(() => { /* offline-tolerant */ });
+
+  // Tap a cell → enlarge that corner alone (so a phone laid in the floor
+  // corner shows just one marker filling its screen).
+  const labelText = {
+    tl: "TL · top-left",
+    tr: "TR · top-right",
+    br: "BR · bottom-right",
+    bl: "BL · bottom-left",
+  };
+  document.querySelectorAll(".cell").forEach(cell => {
+    cell.addEventListener("click", () => {
+      const name = cell.getAttribute("data-corner");
+      document.getElementById("solo-img").src =
+        `/api/calibration/corner-marker/${name}.png?size_px=1600`;
+      document.getElementById("solo-label").textContent = labelText[name] || name;
+      document.body.classList.add("solo");
+    });
+  });
+  document.getElementById("solo-back").addEventListener("click", () => {
+    document.body.classList.remove("solo");
+  });
+</script>
+</body>
+</html>

@@ -1087,6 +1087,80 @@ def charuco_qr(request: Request):
     return Response(content=buf.getvalue(), media_type="image/png")
 
 
+# ---------- Step 2 (extrinsic) corner-marker preview/print/QR ----------
+#
+# The four floor-corner markers don't live in the `markers` table — they're
+# top-of-dictionary ids reserved on the active Camera row (corner_ids_json).
+# So /api/markers/{id}/image and /api/markers/pdf?ids=... return nothing for
+# them. These endpoints render the corner markers directly from the dictionary
+# so the operator can scan a QR on a tablet/phone and see the four corner
+# images, or print a sheet to tape on the floor.
+
+_CORNER_NAMES = ("tl", "tr", "br", "bl")
+
+
+def _active_corner_ids(db: Session) -> dict:
+    cam = db.get(Camera, 1)
+    if not cam:
+        raise HTTPException(404, "No camera configured.")
+    ids = cam.corner_ids() or {}
+    missing = [k for k in _CORNER_NAMES if k not in ids]
+    if missing:
+        raise HTTPException(409, f"Camera has no corner ids for {missing}.")
+    return {k: int(ids[k]) for k in _CORNER_NAMES}
+
+
+@app.get("/api/calibration/corners")
+def calibration_corners(db: Session = Depends(get_db)):
+    """Active camera's four floor-corner aruco ids + rectangle dimensions."""
+    cam = db.get(Camera, 1)
+    if not cam:
+        raise HTTPException(404, "No camera configured.")
+    return {
+        "corner_ids": _active_corner_ids(db),
+        "floor_rect_w_m": cam.floor_rect_w_m,
+        "floor_rect_h_m": cam.floor_rect_h_m,
+        "marker_size_m": cam.marker_size_m,
+        "dictionary": detection.get_dictionary_name(),
+    }
+
+
+@app.get("/api/calibration/corner-marker/{name}.png")
+def corner_marker_png(name: str, size_px: int = 600, db: Session = Depends(get_db)):
+    """Render the marker PNG for one named corner (tl/tr/br/bl) of the active camera."""
+    if name not in _CORNER_NAMES:
+        raise HTTPException(404, f"Unknown corner '{name}'. Use one of {_CORNER_NAMES}.")
+    aruco_id = _active_corner_ids(db)[name]
+    size = max(120, min(int(size_px), 2000))
+    png = marker_gen.render_marker_png(aruco_id, size=size)
+    return Response(content=png, media_type="image/png")
+
+
+@app.get("/api/calibration/corners-qr")
+def corners_qr(request: Request):
+    """QR code that opens the fullscreen /corners tablet page."""
+    base = str(request.base_url).rstrip("/")
+    url = f"{base}/corners"
+    img = qrcode.make(url)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
+
+
+@app.get("/api/calibration/corner-markers-pdf")
+def corner_markers_pdf(db: Session = Depends(get_db)):
+    """A4 PDF with the four floor-corner markers, one per page."""
+    ids = _active_corner_ids(db)
+    payload = [{"aruco_id": ids[name], "label": f"Floor corner {name.upper()}"}
+               for name in _CORNER_NAMES]
+    pdf_bytes = marker_gen.render_pdf(payload, cols=1, rows=1)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="corner-markers.pdf"'},
+    )
+
+
 @app.post("/api/cameras/{camera_id}/calibration/intrinsic/start", response_model=CalibrationStatus)
 def start_intrinsic_calibration(camera_id: int, db: Session = Depends(get_db)):
     if not db.get(Camera, camera_id):
@@ -2572,6 +2646,12 @@ def present_page():
 def charuco_page():
     """Fullscreen ChArUco board for tablet display during intrinsic calibration."""
     return FileResponse(str(FRONTEND / "charuco.html"))
+
+
+@app.get("/corners")
+def corners_page():
+    """Fullscreen four floor-corner markers for tablet display (Step 2 of calibration)."""
+    return FileResponse(str(FRONTEND / "corners.html"))
 
 
 @app.get("/m/{aruco_id}")

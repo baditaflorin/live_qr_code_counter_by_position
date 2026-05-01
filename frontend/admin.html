@@ -287,18 +287,38 @@
         <label>marker side: <input id="ex-marker-size" type="number" min="0.01" max="1" step="0.005" value="0.15" style="width:80px;" /> m</label>
         <button id="ex-save-settings">Save settings</button>
       </div>
-      <div class="row" style="margin-top:10px;">
+      <div class="row" style="margin-top: 10px; align-items: flex-start; gap: 20px;">
         <div>
-          <div class="muted" style="font-size:12px;">Reserved corner ids (top of dictionary)</div>
-          <div id="ex-corner-ids" style="font-family: ui-monospace, SF Mono, monospace; font-size: 14px;"></div>
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">
+            Scan with a tablet → fullscreen four corner markers → tap to enlarge any one.
+          </div>
+          <img id="corners-qr" src="/api/calibration/corners-qr"
+               style="width:140px; height:140px; border-radius:6px; background:#fff; display:block;"
+               alt="QR code for corner markers" />
+          <div class="muted" style="font-size:11px; margin-top:4px; max-width:140px; line-height:1.4;">
+            or <a href="/corners" target="_blank">open directly</a>
+          </div>
         </div>
-        <span class="spacer"></span>
-        <a href="/api/markers/pdf?ids=" target="_blank" id="ex-print-corners">
-          <button>Open print sheet for corner markers</button>
-        </a>
+        <div style="flex:1; min-width: 0;">
+          <div class="muted" style="font-size:12px;">Reserved corner ids (top of dictionary)</div>
+          <div id="ex-corner-ids" style="font-family: ui-monospace, SF Mono, monospace; font-size: 14px; margin-bottom: 10px;"></div>
+          <div class="muted" style="font-size:12px; line-height:1.6;">
+            Three placement options:
+            <ol style="margin: 4px 0 0 18px; padding: 0;">
+              <li>Scan the QR with a tablet → tap each corner → lay the tablet at that floor corner.</li>
+              <li>Use four phones, one per corner — each one taps its corner to enlarge.</li>
+              <li>Print the sheet and tape the markers to the floor.</li>
+            </ol>
+          </div>
+          <div style="margin-top: 10px;">
+            <a href="/api/calibration/corner-markers-pdf" target="_blank" id="ex-print-corners">
+              <button>Download print sheet (PDF)</button>
+            </a>
+          </div>
+        </div>
       </div>
-      <div class="muted" style="margin-top: 6px; font-size:12px;">
-        Tape the four corner markers on the floor in a rectangle (TL, TR, BR, BL → matches the dimensions above).
+      <div class="muted" style="margin-top: 10px; font-size:12px;">
+        Whichever you choose, place the four markers in a TL/TR/BR/BL rectangle matching the dimensions above.
         Then start the live camera below; once all four are visible the system can solve the world frame.
       </div>
 

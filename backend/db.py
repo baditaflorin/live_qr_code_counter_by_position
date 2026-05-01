@@ -284,8 +284,12 @@ def init_db() -> None:
     _migrate_markers()
     _migrate_tracking_samples()
     _migrate_cameras()
-    _seed_default_camera()
+    # Alembic runs *before* seeding because the seed queries columns added by
+    # 0002_metrics_audit_drift_baseline (cameras.anchor_baseline_px_json) —
+    # on an existing prod DB, create_all() above doesn't ALTER, so the column
+    # only appears after the migration.
     _alembic_upgrade()
+    _seed_default_camera()
 
 
 def _alembic_upgrade() -> None:
