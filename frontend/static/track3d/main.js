@@ -301,13 +301,17 @@ function makeHiddenVideo() {
   return v;
 }
 
+const setupGuide = document.getElementById("t3d-setup-guide");
+const setupStep1 = document.getElementById("setup-step-1");
+const setupStep2 = document.getElementById("setup-step-2");
+
 async function refreshCameraInfo() {
   try {
     const cams = await api("/api/cameras");
     const c = cams.find((x) => x.id === 1) || cams[0];
     if (!c) {
       camStatus.textContent = "No camera row in DB.";
-      banner.innerHTML = `<a href="/admin">Open Admin → Cameras</a> to set up a camera.`;
+      banner.innerHTML = `<a href="/admin#cameras">Open Admin → Cameras</a> to set up a camera.`;
       return;
     }
     const lines = [
@@ -323,10 +327,22 @@ async function refreshCameraInfo() {
     ];
     camStatus.textContent = lines.join("\n");
     camStatus.style.whiteSpace = "pre";
-    if (!c.intrinsic_calibrated || !c.extrinsic_calibrated) {
-      banner.innerHTML = `Camera is partially calibrated. Open <a href="/admin">Admin → Cameras</a> to finish.`;
-    } else {
+
+    // Update setup guide steps.
+    if (c.intrinsic_calibrated) {
+      setupStep1.style.opacity = "0.5";
+      setupStep1.innerHTML = `<strong>Intrinsic calibration</strong> ✓ (reproj ${c.intrinsic_reproj_error_px?.toFixed(2)} px)`;
+    }
+    if (c.extrinsic_calibrated) {
+      setupStep2.style.opacity = "0.5";
+      setupStep2.innerHTML = `<strong>Extrinsic calibration</strong> ✓ (reproj ${c.extrinsic_reproj_error_px?.toFixed(2)} px)`;
+    }
+    if (c.intrinsic_calibrated && c.extrinsic_calibrated) {
+      setupGuide.hidden = true;
       banner.textContent = "";
+    } else {
+      setupGuide.hidden = false;
+      banner.innerHTML = `Step ${c.intrinsic_calibrated ? "2" : "1"} of 2 — open <a href="/admin#cameras">Admin → Cameras</a> to finish calibration.`;
     }
   } catch (e) {
     camStatus.textContent = "Error: " + e.message;
