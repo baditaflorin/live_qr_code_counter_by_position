@@ -92,6 +92,17 @@ class Vote(Base):
     )
 
 
+class ControlMarker(Base):
+    """Control markers — IDs reserved at the top of the dictionary that fire
+    actions instead of representing people. Implements ADR 0011 + ADR 0014."""
+    __tablename__ = "control_markers"
+    aruco_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    enabled: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class TrackingSession(Base):
     """A 'who-was-where, with whom, for how long' recording window.
 

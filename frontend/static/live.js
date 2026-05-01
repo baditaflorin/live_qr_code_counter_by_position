@@ -168,6 +168,7 @@ function openWS() {
       renderZoneCounts(msg.zone_counts || {}, zonesCache);
       renderDetected(msg.detections || []);
       maybeClusterCue(msg.zone_counts);
+      handleControlEvents(msg.control_events);
       tickFps();
     } catch (e) {
       console.error(e);
@@ -200,6 +201,48 @@ function renderActiveBanner(active) {
   }
   _lastActiveQuestionId = active.id;
 }
+
+// Show a transient banner when a control marker fires, plus a click cue.
+// Server passes through the action label (e.g. "Start tracking") and the
+// debounced action enum (TRACK_START / Q_NEXT / etc.) so the banner can
+// show what just fired in human terms.
+function handleControlEvents(events) {
+  if (!Array.isArray(events) || !events.length) return;
+  for (const ev of events) {
+    audioCues.play("control_card");
+    showControlBanner(ev);
+    // Mirror through to in-page side effects so the live page reflects state
+    // immediately even before the next reload tick.
+    if (ev.action === "TRACK_START") audioCues.play("tracking_start");
+    if (ev.action === "TRACK_STOP")  audioCues.play("tracking_stop");
+    if (ev.action === "Q_NEXT" || ev.action === "Q_PREV") {
+      // Force-refresh the questions dropdown so the new active state lands.
+      loadQuestions().catch(() => {});
+    }
+  }
+}
+
+let _ctrlBannerTimer = null;
+function showControlBanner(ev) {
+  let el = document.getElementById("ctrl-banner");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "ctrl-banner";
+    el.style.cssText = `
+      position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%);
+      background: var(--accent); color: #052e1a; padding: 10px 18px;
+      font-weight: 700; border-radius: 8px; font-size: 16px; z-index: 9999;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+      transition: opacity 0.4s ease;
+    `;
+    document.body.appendChild(el);
+  }
+  el.textContent = `▶ ${ev.label || ev.action}`;
+  el.style.opacity = "1";
+  if (_ctrlBannerTimer) clearTimeout(_ctrlBannerTimer);
+  _ctrlBannerTimer = setTimeout(() => { el.style.opacity = "0"; }, 2000);
+}
+
 
 // Cluster cue — plays a soft chord when 5+ markers are co-located in any
 // zone for the first time (debounced to once every 10 seconds).

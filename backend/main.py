@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, joinedload
 from . import (
     badges as badge_gen,
     calibration as calibration_mod,
+    control as control_mod,
     detection,
     markers as marker_gen,
     pose as pose_mod,
@@ -30,8 +31,8 @@ from . import (
     tracking as tracking_mod,
 )
 from .db import (
-    Camera, Marker, Person, Question, TrackingSample, TrackingSession, Vote, Zone,
-    get_db, init_db,
+    Camera, ControlMarker, Marker, Person, Question, SessionLocal,
+    TrackingSample, TrackingSession, Vote, Zone, get_db, init_db,
 )
 from .schemas import (
     CalibrationStatus, CameraOut, CameraSettingsIn, ExtrinsicAutoIn,
@@ -48,6 +49,16 @@ FRONTEND = ROOT / "frontend"
 app = FastAPI(title="ArUco Counter")
 
 init_db()
+
+# Seed default control markers (idempotent) so the 4 hands-free cards exist
+# from the first boot. ADR 0011 + 0014.
+def _seed_control_on_boot() -> None:
+    db = SessionLocal()
+    try:
+        control_mod.seed_default_control_markers(db)
+    finally:
+        db.close()
+_seed_control_on_boot()
 
 
 # ---------- helpers ----------
@@ -147,8 +158,21 @@ def _question_to_out(q: Question) -> QuestionOut:
 
 
 def _next_aruco_id(db: Session) -> int:
+    """Allocate the next person-marker id, skipping the reserved control range."""
     max_id = db.execute(select(func.max(Marker.aruco_id))).scalar()
-    return 0 if max_id is None else max_id + 1
+    candidate = 0 if max_id is None else max_id + 1
+    lo, hi = control_mod.control_id_range()
+    # If the next candidate falls inside the reserved range, the dictionary
+    # is exhausted for person markers — caller should switch ARUCO_DICTIONARY.
+    if candidate >= lo:
+        # Try to find the smallest unused id outside the reserved range.
+        used = {row[0] for row in db.execute(select(Marker.aruco_id)).all()}
+        for cand in range(0, lo):
+            if cand not in used:
+                return cand
+        # Genuinely full.
+        return candidate
+    return candidate
 
 
 # ---------- system info ----------
@@ -201,6 +225,55 @@ def delete_person(person_id: int, db: Session = Depends(get_db)):
     db.delete(p)
     db.commit()
     return {"ok": True}
+
+
+# ---------- control markers (ADR 0011 + 0014) ----------
+
+@app.get("/api/control-markers")
+def list_control_markers(db: Session = Depends(get_db)):
+    rows = db.execute(select(ControlMarker).order_by(ControlMarker.aruco_id)).scalars().all()
+    lo, hi = control_mod.control_id_range()
+    return {
+        "reserved_range": [lo, hi],
+        "known_actions": list(control_mod.KNOWN_ACTIONS),
+        "markers": [
+            {"aruco_id": m.aruco_id, "action": m.action, "label": m.label, "enabled": bool(m.enabled)}
+            for m in rows
+        ],
+    }
+
+
+@app.put("/api/control-markers/{aruco_id}")
+def update_control_marker(aruco_id: int, payload: dict, db: Session = Depends(get_db)):
+    m = db.get(ControlMarker, aruco_id)
+    if not m:
+        raise HTTPException(404, "Control marker not found")
+    if "action" in payload:
+        if payload["action"] not in control_mod.KNOWN_ACTIONS:
+            raise HTTPException(400, f"Unknown action; one of {control_mod.KNOWN_ACTIONS}")
+        m.action = payload["action"]
+    if "label" in payload:
+        m.label = str(payload["label"])[:120]
+    if "enabled" in payload:
+        m.enabled = 1 if payload["enabled"] else 0
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/control-markers/pdf")
+def control_markers_pdf(db: Session = Depends(get_db)):
+    """Printable PDF — one large card per control marker with the action label."""
+    rows = db.execute(select(ControlMarker).order_by(ControlMarker.aruco_id)).scalars().all()
+    payload = [{"aruco_id": m.aruco_id, "label": f"{m.action}\n{m.label}"} for m in rows]
+    if not payload:
+        raise HTTPException(404, "No control markers configured")
+    # Reuse the existing marker PDF generator — 2x2 layout for big cards.
+    pdf_bytes = marker_gen.render_pdf(payload, cols=2, rows=2)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="control-cards.pdf"'},
+    )
 
 
 # ---------- CSV roster import ----------
@@ -381,14 +454,16 @@ def create_marker_batch(payload: MarkerCreateBatch, db: Session = Depends(get_db
         if not db.get(Person, payload.person_id):
             raise HTTPException(400, "Unknown person_id")
     dict_size = detection.dictionary_size()
+    person_ceiling = dict_size - control_mod.CONTROL_RESERVED_COUNT
     next_id = _next_aruco_id(db)
-    if next_id + payload.count > dict_size:
-        remaining = max(0, dict_size - next_id)
+    if next_id + payload.count > person_ceiling:
+        remaining = max(0, person_ceiling - next_id)
         raise HTTPException(
             400,
-            f"Dictionary {detection.get_dictionary_name()} only holds {dict_size} unique markers "
-            f"(next id {next_id}, {remaining} remaining). Switch ARUCO_DICTIONARY in docker-compose.yml "
-            f"to a larger one (e.g. DICT_4X4_250) and rebuild.",
+            f"Dictionary {detection.get_dictionary_name()} has {person_ceiling} person-marker slots "
+            f"(top {control_mod.CONTROL_RESERVED_COUNT} reserved for control cards). "
+            f"Next id is {next_id}, only {remaining} remaining. "
+            f"Switch ARUCO_DICTIONARY to a larger one (e.g. DICT_4X4_250) and rebuild.",
         )
     placement = _normalize_placement(payload.placement)
     created: list[Marker] = []
@@ -1391,6 +1466,26 @@ async def ws_detect(ws: WebSocket):
             h, w = frame.shape[:2]
             results = detection.detect(frame)
 
+            # Split detections into person vs control.
+            person_results = [d for d in results if not control_mod.is_control_id(d.aruco_id)]
+            control_ids = {d.aruco_id for d in results if control_mod.is_control_id(d.aruco_id)}
+
+            # Run the command router; fire actions for any cards held still long enough.
+            fired_now = control_mod.router.update(control_ids, now)
+            control_events: list[dict] = []
+            for mid in fired_now:
+                ev = control_mod.fire(mid)
+                if ev:
+                    control_events.append({
+                        "aruco_id": ev.aruco_id, "action": ev.action,
+                        "label": ev.label, "t": ev.t,
+                    })
+            # If any actions fired, force a state reload on the next frame so
+            # downstream state (active question, active tracking, zones for
+            # the new question's formation) refreshes immediately.
+            if fired_now:
+                last_state_reload = 0.0
+
             zones_norm = [
                 {"id": z["id"], "label": z["label"], "polygon": z["polygon"]}
                 for z in cached_zones
@@ -1399,13 +1494,14 @@ async def ws_detect(ws: WebSocket):
             zone_counts: dict[int, int] = {z["id"]: 0 for z in cached_zones}
             zone_label_lookup = {z["id"]: z["label"] for z in cached_zones}
 
-            marker_meta = _marker_meta_for(set(d.aruco_id for d in results))
+            marker_meta = _marker_meta_for(set(d.aruco_id for d in person_results))
 
             # ADR 0048 — pose estimation when intrinsics are calibrated.
+            # Only run on person_results; control markers don't need 3D pose.
             poses: dict[int, detection.PoseDetection] = {}
             if cached_camera and cached_camera.get("K") is not None:
                 poses = detection.estimate_pose(
-                    results,
+                    person_results,
                     np.array(cached_camera["K"], dtype=np.float64),
                     np.array(cached_camera["dist"], dtype=np.float64),
                     cached_camera["marker_size_m"],
@@ -1420,7 +1516,7 @@ async def ws_detect(ws: WebSocket):
                     t=np.array(cached_camera["t"], dtype=np.float64),
                 )
                 marker_obs = scene_mod.build_marker_observations(
-                    results, poses, extrinsic, marker_meta
+                    person_results, poses, extrinsic, marker_meta
                 )
                 people = scene_mod.fuse_person_observations(marker_obs)
                 scene_payload = {
@@ -1432,7 +1528,7 @@ async def ws_detect(ws: WebSocket):
                     "markers": [scene_mod.serialize_marker(m) for m in marker_obs],
                     "people":  [scene_mod.serialize_person(p) for p in people],
                     "coverage_pct": (
-                        round(100.0 * len(poses) / max(1, len(results)), 1)
+                        round(100.0 * len(poses) / max(1, len(person_results)), 1)
                     ),
                 }
 
@@ -1440,16 +1536,18 @@ async def ws_detect(ws: WebSocket):
             corner_centers_px: dict[str, list[float]] = {}
             corner_ids = (cached_camera or {}).get("corner_ids") or {}
             corner_lookup = {int(v): k for k, v in corner_ids.items()}
+            # Corner-marker pixel positions: scan ALL detections (corner markers may
+            # live anywhere in the dictionary, including the control range).
             for d in results:
+                if d.aruco_id in corner_lookup:
+                    corner_centers_px[corner_lookup[d.aruco_id]] = list(d.center)
+            for d in person_results:
                 cx, cy = d.center
                 center_norm = (cx / w, cy / h)
                 zid = detection.assign_zone(center_norm, zones_norm)
                 if zid is not None:
                     zone_counts[zid] = zone_counts.get(zid, 0) + 1
-                # Surface the live pixel center of any of the four floor-corner
-                # markers so the UI can offer a one-click "calibrate extrinsic".
-                if d.aruco_id in corner_lookup:
-                    corner_centers_px[corner_lookup[d.aruco_id]] = [float(cx), float(cy)]
+                # corner_centers_px was populated above by the all-detections scan.
 
                 entry = {
                     "aruco_id": d.aruco_id,
@@ -1515,6 +1613,7 @@ async def ws_detect(ws: WebSocket):
                 } if cached_camera else None,
                 "scene_world": scene_payload,
                 "calibration_hint": calibration_hint,
+                "control_events": control_events,
             }
             await ws.send_json(payload)
             # Mirror to /present and any other observers.
