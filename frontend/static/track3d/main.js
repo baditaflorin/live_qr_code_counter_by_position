@@ -29,6 +29,10 @@ const optTrails     = document.getElementById("opt-trails");
 const optHeatmap    = document.getElementById("opt-heatmap");
 const optClear      = document.getElementById("opt-clear-history");
 const optStatus     = document.getElementById("opt-status");
+const viewFrameBtn  = document.getElementById("view-frame");
+const viewTopBtn    = document.getElementById("view-top");
+const viewResetBtn  = document.getElementById("view-reset");
+const viewFollowSel = document.getElementById("view-follow");
 
 // ---------- Three.js scene -----------------------------------------------
 
@@ -422,7 +426,9 @@ function updateScene(world) {
 
     pushTrailPoint(p.person_id, x, y);
     if (dt_s > 0) bumpHeat(x, y, dt_s);
+    lastPersonPos.set(p.person_id, [x, y]);
   }
+  refreshFollowDropdown(world.people || []);
 
   // Heatmap mesh is expensive to rebuild — refresh at 1 Hz max.
   if (optHeatmap.checked && (!heatMesh || performance.now() - (heatMesh.userData?.builtAt || 0) > 1000)) {
@@ -465,15 +471,24 @@ function renderEncounters(enc) {
   for (const e of enc.live) {
     const card = document.createElement("div");
     card.className = "person-card";
+    card.style.cursor = "pointer";
+    card.title = "Fly camera between the pair";
     const aName = e.a_name || `#${e.a_id}`;
     const bName = e.b_name || `#${e.b_id}`;
     const m = Math.floor(e.duration_s / 60);
     const s = Math.floor(e.duration_s % 60);
     const dur = m > 0 ? `${m}m${String(s).padStart(2, "0")}s` : `${s}s`;
     card.innerHTML = `
-      <div class="nm">${aName} ↔ ${bName}</div>
+      <div class="nm">${aName} ↔ ${bName} <span class="muted" style="font-size:11px; font-weight:normal;">→ fly</span></div>
       <div class="muted">together for ${dur}</div>
     `;
+    card.addEventListener("click", () => {
+      const a = lastPersonPos.get(e.a_id);
+      const b = lastPersonPos.get(e.b_id);
+      if (!a || !b) return;
+      const mid = new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 1.0);
+      flyCameraTo(mid.clone().add(new THREE.Vector3(1.0, -2.5, 1.5)), mid);
+    });
     encountersList.appendChild(card);
   }
 }
@@ -490,15 +505,47 @@ function renderPeopleList(people) {
   for (const p of named) {
     const card = document.createElement("div");
     card.className = "person-card";
+    card.style.cursor = "pointer";
+    card.title = "Click to fly camera here · double-click to follow";
     const [x, y] = p.body_xyz_m;
     card.innerHTML = `
-      <div class="nm">${p.person_name || "(unassigned)"}</div>
+      <div class="nm">${p.person_name || "(unassigned)"} <span class="muted" style="font-size:11px; font-weight:normal;">→ fly</span></div>
       <div class="muted">markers: ${p.marker_ids.join(", ")} · placements: ${p.placements_seen.join("+")}</div>
       <div>pos: (${x.toFixed(2)}, ${y.toFixed(2)}) m · yaw ${p.body_yaw_deg.toFixed(1)}°</div>
       <div class="muted">conf ${p.confidence.toFixed(2)}</div>
     `;
+    card.addEventListener("click", () => flyToPerson(p.person_id));
+    card.addEventListener("dblclick", () => {
+      followingPersonId = p.person_id;
+      if (viewFollowSel) viewFollowSel.value = String(p.person_id);
+    });
     peopleList.appendChild(card);
   }
+}
+
+function refreshFollowDropdown(people) {
+  if (!viewFollowSel) return;
+  const named = people.filter((p) => p.person_id != null);
+  const currentVal = viewFollowSel.value;
+  const wantedKeys = new Set(named.map((p) => String(p.person_id)));
+  // Skip the rebuild if the option set hasn't changed (avoids killing the
+  // dropdown's open state mid-frame).
+  const haveKeys = new Set(
+    [...viewFollowSel.options].map((o) => o.value).filter((v) => v !== "")
+  );
+  let changed = wantedKeys.size !== haveKeys.size;
+  if (!changed) for (const k of wantedKeys) if (!haveKeys.has(k)) { changed = true; break; }
+  if (!changed) return;
+
+  viewFollowSel.innerHTML = '<option value="">— none —</option>';
+  for (const p of named) {
+    const opt = document.createElement("option");
+    opt.value = String(p.person_id);
+    opt.textContent = p.person_name || `#${p.person_id}`;
+    viewFollowSel.appendChild(opt);
+  }
+  // Restore selection if the followed person is still in view.
+  if (wantedKeys.has(currentVal)) viewFollowSel.value = currentVal;
 }
 
 function renderCamerasList(cams) {
@@ -599,6 +646,109 @@ async function refreshCalibrationBanner() {
   }
 }
 
+// ---------- view controls + camera fly ----------------------------------
+
+// Smooth camera transitions: when these are set, the animate loop lerps
+// camera.position and controls.target toward them with critical-damping
+// feel.  Setting `followingPersonId` keeps re-targeting on each frame so
+// the camera tracks a moving person.
+let cameraTargetPos    = null;  // THREE.Vector3 or null
+let cameraTargetLook   = null;  // THREE.Vector3 or null
+let followingPersonId  = null;  // person_id or null
+const lastPersonPos    = new Map();  // person_id -> [x, y]
+
+const DEFAULT_CAM_POS  = new THREE.Vector3(6, -6, 6);
+const DEFAULT_LOOK     = () => floorMesh
+  ? new THREE.Vector3(floorMesh.userData.w / 2, floorMesh.userData.h / 2, 0)
+  : new THREE.Vector3(2.5, 2.0, 0);
+
+function flyCameraTo(pos, look) {
+  cameraTargetPos  = pos.clone();
+  cameraTargetLook = look.clone();
+}
+
+function viewReset() {
+  followingPersonId = null;
+  if (viewFollowSel) viewFollowSel.value = "";
+  flyCameraTo(DEFAULT_CAM_POS, DEFAULT_LOOK());
+}
+
+function viewTopDown() {
+  followingPersonId = null;
+  if (viewFollowSel) viewFollowSel.value = "";
+  const target = DEFAULT_LOOK();
+  // Hover above floor centre, looking straight down (with a tiny offset on
+  // Y so the OrbitControls "up" axis doesn't degenerate).
+  const w = floorMesh ? floorMesh.userData.w : 5;
+  const h = floorMesh ? floorMesh.userData.h : 4;
+  const height = Math.max(w, h) * 1.1;
+  const pos = new THREE.Vector3(target.x, target.y - 0.001, height);
+  flyCameraTo(pos, target);
+}
+
+function viewFrameAll() {
+  followingPersonId = null;
+  if (viewFollowSel) viewFollowSel.value = "";
+  // Build the bounding box of every visible marker + person.
+  const points = [];
+  for (const m of markerMeshes.values()) points.push(m.position.clone());
+  for (const m of personMeshes.values()) points.push(m.position.clone());
+  if (points.length === 0) {
+    viewReset();
+    return;
+  }
+  const box = new THREE.Box3().setFromPoints(points);
+  const target = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3()).length();
+  const dist = Math.max(2.5, size * 1.4);
+  // Pick a viewing direction that mirrors the default 45° orbit.
+  const offset = new THREE.Vector3(1, -1, 1).normalize().multiplyScalar(dist);
+  flyCameraTo(target.clone().add(offset), target);
+}
+
+function flyToPerson(personId) {
+  const xy = lastPersonPos.get(personId);
+  if (!xy) return;
+  const target = new THREE.Vector3(xy[0], xy[1], 1.0);
+  // 2.5 m back, 1.5 m up — comfortable shoulder-height-ish framing.
+  const offset = new THREE.Vector3(1.0, -2.0, 1.5);
+  flyCameraTo(target.clone().add(offset), target);
+}
+
+// Raycast click: clicking a marker or person flies the camera to it.
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+renderer.domElement.addEventListener("dblclick", (ev) => {
+  const r = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((ev.clientX - r.left) / r.width)  * 2 - 1;
+  mouse.y = -((ev.clientY - r.top)  / r.height) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  // Look for hits on any person mesh (or marker mesh as fallback).
+  const candidates = [];
+  for (const [pid, mesh] of personMeshes) candidates.push({ mesh, pid });
+  for (const [aid, mesh] of markerMeshes) candidates.push({ mesh });
+  const meshes = candidates.map((c) => c.mesh);
+  const hits = raycaster.intersectObjects(meshes, true);
+  if (!hits.length) return;
+  // Find which group (mesh) the intersected child belongs to.
+  for (const hit of hits) {
+    let g = hit.object;
+    while (g && !candidates.find((c) => c.mesh === g)) g = g.parent;
+    if (!g) continue;
+    const c = candidates.find((cc) => cc.mesh === g);
+    if (c.pid != null) flyToPerson(c.pid);
+    else flyCameraTo(g.position.clone().add(new THREE.Vector3(0.5, -0.5, 1.0)), g.position.clone());
+    break;
+  }
+});
+
+if (viewFrameBtn)  viewFrameBtn.addEventListener("click", viewFrameAll);
+if (viewTopBtn)    viewTopBtn.addEventListener("click", viewTopDown);
+if (viewResetBtn)  viewResetBtn.addEventListener("click", viewReset);
+if (viewFollowSel) viewFollowSel.addEventListener("change", () => {
+  followingPersonId = viewFollowSel.value ? parseInt(viewFollowSel.value, 10) : null;
+});
+
 // ---------- size + animate ----------------------------------------------
 
 function onResize() {
@@ -612,6 +762,34 @@ onResize();
 
 function animate() {
   requestAnimationFrame(animate);
+
+  // Follow mode: re-aim at the latest position of the followed person.
+  if (followingPersonId != null) {
+    const xy = lastPersonPos.get(followingPersonId);
+    if (xy) {
+      const target = new THREE.Vector3(xy[0], xy[1], 1.0);
+      cameraTargetLook = target;
+      // Maintain a constant offset behind the person — recomputed each frame
+      // so the camera glides with them rather than jumping.
+      cameraTargetPos = target.clone().add(new THREE.Vector3(1.0, -2.0, 1.5));
+    }
+  }
+
+  // Smooth lerp toward camera target.  ~12% per frame at 60 fps gives a
+  // ~250 ms glide that feels quick but not jarring.
+  if (cameraTargetPos) {
+    camera.position.lerp(cameraTargetPos, 0.12);
+    if (camera.position.distanceTo(cameraTargetPos) < 0.005 && followingPersonId == null) {
+      cameraTargetPos = null;
+    }
+  }
+  if (cameraTargetLook) {
+    controls.target.lerp(cameraTargetLook, 0.12);
+    if (controls.target.distanceTo(cameraTargetLook) < 0.005 && followingPersonId == null) {
+      cameraTargetLook = null;
+    }
+  }
+
   controls.update();
   renderer.render(scene, camera);
 }
