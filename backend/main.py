@@ -4,7 +4,7 @@ import json
 import os
 import socket
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -15,23 +15,27 @@ from fastapi import (
     Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile,
     WebSocket, WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from . import (
+    auth as auth_mod,
     badges as badge_gen,
     calibration as calibration_mod,
     control as control_mod,
     detection,
+    drift as drift_mod,
+    marker_tracker as tracker_mod,
     markers as marker_gen,
+    observability as obs,
     pose as pose_mod,
     scene as scene_mod,
     tracking as tracking_mod,
 )
 from .db import (
-    Camera, ControlMarker, Marker, Person, Question, SessionLocal,
+    AuditLog, Camera, ControlMarker, Marker, Metric, Person, Question, SessionLocal,
     TrackingSample, TrackingSession, Vote, Zone, get_db, init_db,
 )
 from .schemas import (
@@ -47,6 +51,25 @@ ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 
 app = FastAPI(title="ArUco Counter")
+
+# Auth middleware (ADR 0001). No-op when APP_TOKEN env var is unset, so
+# existing deployments keep working until the operator opts in.
+app.add_middleware(auth_mod.AuthMiddleware)
+
+# Audit + request-id middleware (ADR 0009). Free of side-effects when the
+# audited paths aren't hit.
+app.add_middleware(obs.AuditMiddleware)
+
+
+@app.on_event("startup")
+async def _start_observability() -> None:
+    obs.start_background_flush()
+
+
+@app.on_event("shutdown")
+async def _final_flush() -> None:
+    obs.flush_now()
+
 
 init_db()
 
@@ -630,6 +653,216 @@ def markers_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": 'attachment; filename="markers.pdf"'},
     )
+
+
+# ---------- system limits / health (ADR 0035) ----------
+
+@app.get("/api/system/limits")
+def system_limits(db: Session = Depends(get_db)):
+    """Documented envelope + last observed values for each limit. Each row
+    has a green/yellow/red verdict so the operator can see at a glance
+    whether the system is in spec right now."""
+    obs.flush_now()
+    cutoff_60s = datetime.utcnow() - timedelta(seconds=60)
+    cutoff_5m  = datetime.utcnow() - timedelta(minutes=5)
+
+    # Observed values from the metrics buffer.
+    median_detect_ms = _median_metric(db, "detection.latency_ms", cutoff_60s)
+    median_bandwidth = _median_metric(db, "ws.bandwidth_mbps",   cutoff_60s)
+    last_report_ms   = _last_metric(  db, "db.report_compute_ms",cutoff_5m)
+    ghost_count_60s  = _sum_metric(   db, "detection.ghosts",    cutoff_60s)
+
+    # Static configuration / capacity.
+    dict_size = detection.dictionary_size()
+    person_ceiling = dict_size - control_mod.CONTROL_RESERVED_COUNT
+    next_id = _next_aruco_id(db)
+    person_used = next_id
+    sample_total = db.execute(select(func.count(TrackingSample.id))).scalar() or 0
+
+    rows = [
+        _limit_row(
+            "Person-marker capacity",
+            f"{person_used} / {person_ceiling}",
+            ratio=person_used / max(1, person_ceiling),
+            warn_at=0.8, fail_at=0.97,
+            hint=f"Top {control_mod.CONTROL_RESERVED_COUNT} ids are reserved for control markers (ADR 0011).",
+        ),
+        _limit_row(
+            "Dictionary",
+            f"{detection.get_dictionary_name()} ({dict_size} ids)",
+            ratio=0.0, warn_at=2.0, fail_at=2.0,  # always green; informational
+            hint="Set ARUCO_DICTIONARY env to switch.",
+        ),
+        _limit_row(
+            "Detection latency (60s median)",
+            f"{median_detect_ms:.0f} ms" if median_detect_ms is not None else "—",
+            ratio=(median_detect_ms or 0) / 100.0,
+            warn_at=0.5, fail_at=1.0,  # 50ms yellow, 100ms red
+            hint="Detection per frame should stay under 50 ms at 1080p.",
+        ),
+        _limit_row(
+            "WS upstream bandwidth (60s median)",
+            f"{median_bandwidth:.1f} Mbps" if median_bandwidth is not None else "—",
+            ratio=(median_bandwidth or 0) / 30.0,
+            warn_at=0.6, fail_at=0.9,  # >18 Mbps yellow, >27 Mbps red on typical Wi-Fi
+            hint="Most venue Wi-Fi caps around 30 Mbps upstream per client.",
+        ),
+        _limit_row(
+            "Report compute (last 5min)",
+            f"{last_report_ms:.0f} ms" if last_report_ms is not None else "—",
+            ratio=(last_report_ms or 0) / 5000.0,
+            warn_at=0.6, fail_at=1.0,  # 3s yellow, 5s red
+            hint="Long compute usually means tracking_samples needs pruning.",
+        ),
+        _limit_row(
+            "Tracking samples (lifetime)",
+            f"{sample_total:,}",
+            ratio=sample_total / 20_000_000.0,  # 20M soft limit on SQLite
+            warn_at=0.5, fail_at=0.9,
+            hint="SQLite slows past ~20 M rows; prune via retention (ADR 0010).",
+        ),
+        _limit_row(
+            "Marker ghost frames (60s)",
+            f"{ghost_count_60s:.0f}" if ghost_count_60s is not None else "0",
+            ratio=(ghost_count_60s or 0) / 600.0,
+            warn_at=0.5, fail_at=1.0,
+            hint="High counts = detection is unreliable; check lighting / marker size (ADR 0031).",
+        ),
+    ]
+    return {
+        "observed_at": datetime.utcnow().isoformat(),
+        "rows": rows,
+        "overall": _overall_verdict([r["verdict"] for r in rows]),
+    }
+
+
+def _median_metric(db: Session, name: str, since: datetime) -> Optional[float]:
+    rows = db.execute(
+        select(Metric.value).where(Metric.name == name, Metric.t >= since)
+    ).scalars().all()
+    if not rows:
+        return None
+    rows = sorted(rows)
+    n = len(rows)
+    return rows[n // 2] if n % 2 else (rows[n // 2 - 1] + rows[n // 2]) / 2
+
+
+def _last_metric(db: Session, name: str, since: datetime) -> Optional[float]:
+    r = db.execute(
+        select(Metric.value).where(Metric.name == name, Metric.t >= since)
+        .order_by(Metric.t.desc()).limit(1)
+    ).scalar()
+    return float(r) if r is not None else None
+
+
+def _sum_metric(db: Session, name: str, since: datetime) -> Optional[float]:
+    r = db.execute(
+        select(func.sum(Metric.value)).where(Metric.name == name, Metric.t >= since)
+    ).scalar()
+    return float(r) if r is not None else None
+
+
+def _limit_row(label: str, value: str, ratio: float, warn_at: float, fail_at: float, hint: str) -> dict:
+    if ratio >= fail_at:
+        verdict = "red"
+    elif ratio >= warn_at:
+        verdict = "yellow"
+    else:
+        verdict = "green"
+    return {"label": label, "value": value, "verdict": verdict, "hint": hint}
+
+
+def _overall_verdict(verdicts: list[str]) -> str:
+    if "red" in verdicts:
+        return "red"
+    if "yellow" in verdicts:
+        return "yellow"
+    return "green"
+
+
+# ---------- observability surfaces (ADR 0009 + 0036) ----------
+
+@app.get("/api/metrics")
+def get_metrics(
+    name: Optional[str] = None,
+    since_minutes: int = 60,
+    limit: int = 5000,
+    db: Session = Depends(get_db),
+):
+    """Recent metrics. `name=detection.markers_seen&since_minutes=10` for a
+    focused query, omit `name` for a unique-name list with last value."""
+    obs.flush_now()  # ensure recent recordings are visible
+    cutoff = datetime.utcnow() - timedelta(minutes=max(1, min(since_minutes, 7 * 24 * 60)))
+    if name:
+        rows = (
+            db.execute(
+                select(Metric).where(Metric.name == name, Metric.t >= cutoff)
+                .order_by(Metric.t.desc()).limit(limit)
+            )
+            .scalars().all()
+        )
+        return {
+            "name": name,
+            "samples": [
+                {
+                    "t": r.t.isoformat(),
+                    "value": r.value,
+                    "tags": json.loads(r.tags_json) if r.tags_json else {},
+                }
+                for r in rows
+            ],
+        }
+    # Summary view: per-metric count + last value.
+    summary = db.execute(
+        select(Metric.name, func.count(Metric.id), func.max(Metric.t))
+        .where(Metric.t >= cutoff)
+        .group_by(Metric.name)
+        .order_by(Metric.name)
+    ).all()
+    return {
+        "since": cutoff.isoformat(),
+        "metrics": [
+            {"name": n, "count": int(c), "last_seen": (t.isoformat() if t else None)}
+            for n, c, t in summary
+        ],
+    }
+
+
+@app.get("/api/audit")
+def get_audit_log(
+    since_minutes: int = 60,
+    method: Optional[str] = None,
+    path_prefix: Optional[str] = None,
+    actor: Optional[str] = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    obs.flush_now()
+    cutoff = datetime.utcnow() - timedelta(minutes=max(1, min(since_minutes, 30 * 24 * 60)))
+    stmt = select(AuditLog).where(AuditLog.t >= cutoff)
+    if method:
+        stmt = stmt.where(AuditLog.method == method.upper())
+    if path_prefix:
+        stmt = stmt.where(AuditLog.path.like(f"{path_prefix}%"))
+    if actor:
+        stmt = stmt.where(AuditLog.actor_token_hash == actor)
+    rows = db.execute(stmt.order_by(AuditLog.t.desc()).limit(limit)).scalars().all()
+    return {
+        "since": cutoff.isoformat(),
+        "rows": [
+            {
+                "t": r.t.isoformat(),
+                "actor": r.actor_token_hash,
+                "method": r.method,
+                "path": r.path,
+                "query": r.query,
+                "status": r.status_code,
+                "request_id": r.request_id,
+                "duration_ms": r.duration_ms,
+            }
+            for r in rows
+        ],
+    }
 
 
 # ---------- resolution / marker-size feasibility (ADR 0031) ----------
@@ -1366,12 +1599,117 @@ def delete_tracking(session_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@app.get("/api/tracking/sessions/{session_id}/timeline")
+def tracking_timeline(
+    session_id: int,
+    bucket_ms: int = 500,
+    db: Session = Depends(get_db),
+):
+    """Streamable NDJSON of per-bucket position snapshots — used by the
+    /track report panel scrubber. One JSON object per bucket:
+
+      {"t": "2026-05-01T15:32:11.500Z",
+       "frame": [{"id": 47, "x": 0.31, "y": 0.62, "name": "Anna"}, ...]}
+
+    Buckets are clipped to the session's actual time span; sub-millisecond
+    intervals are coalesced to a single bucket.
+    """
+    s = db.get(TrackingSession, session_id)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    bucket_ms = max(50, min(bucket_ms, 60000))
+
+    rows = (
+        db.execute(
+            select(TrackingSample)
+            .where(TrackingSample.session_id == session_id)
+            .order_by(TrackingSample.t.asc(), TrackingSample.id.asc())
+        )
+        .scalars().all()
+    )
+
+    # Lookup person names for IDs we'll surface.
+    seen_ids = {r.marker_aruco_id for r in rows}
+    names: dict[int, str] = {}
+    if seen_ids:
+        for m in (
+            db.execute(
+                select(Marker).options(joinedload(Marker.person))
+                .where(Marker.aruco_id.in_(seen_ids))
+            ).scalars().all()
+        ):
+            if m.person:
+                names[m.aruco_id] = m.person.name
+
+    started_at = s.started_at
+
+    def _bucket_index(t: datetime) -> int:
+        return int((t - started_at).total_seconds() * 1000.0 // bucket_ms)
+
+    def _stream():
+        if not rows:
+            return
+        current_bucket: Optional[int] = None
+        frame: list[dict] = []
+        # First-write-wins per (bucket, marker) so a marker doesn't appear
+        # twice in the same bucket if multiple samples landed.
+        seen_in_bucket: set[int] = set()
+        for r in rows:
+            b = _bucket_index(r.t)
+            if current_bucket is None:
+                current_bucket = b
+            if b != current_bucket:
+                yield json.dumps({
+                    "t_ms": current_bucket * bucket_ms,
+                    "frame": frame,
+                }) + "\n"
+                current_bucket = b
+                frame = []
+                seen_in_bucket = set()
+            if r.marker_aruco_id in seen_in_bucket:
+                continue
+            seen_in_bucket.add(r.marker_aruco_id)
+            entry = {
+                "id": r.marker_aruco_id,
+                "x": round(r.x_norm, 4),
+                "y": round(r.y_norm, 4),
+            }
+            if r.world_x_m is not None:
+                entry["wx_m"] = round(r.world_x_m, 3)
+                entry["wy_m"] = round(r.world_y_m, 3)
+            n = names.get(r.marker_aruco_id)
+            if n:
+                entry["name"] = n
+            frame.append(entry)
+        if frame:
+            yield json.dumps({
+                "t_ms": (current_bucket or 0) * bucket_ms,
+                "frame": frame,
+            }) + "\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "X-Bucket-Ms": str(bucket_ms),
+            "X-Started-At": started_at.isoformat(),
+        },
+    )
+
+
 @app.get("/api/tracking/sessions/{session_id}/report")
 def tracking_report(session_id: int, db: Session = Depends(get_db)):
     s = db.get(TrackingSession, session_id)
     if not s:
         raise HTTPException(404, "Session not found")
+    _t0 = time.monotonic()
     report = tracking_mod.compute_report(db, s)
+    obs.record_metric(
+        "db.report_compute_ms",
+        int((time.monotonic() - _t0) * 1000),
+        session_id=session_id,
+        sample_count=report.get("sample_count", 0),
+    )
     sc, ms = _tracking_session_stats(db, s.id)
     return {
         "session": _tracking_to_out(s, sc, ms).model_dump(),
@@ -1390,13 +1728,14 @@ def _record_tracking_samples(
     sample_interval_ms: int,
     detections_payload: list[dict],
     now_monotonic: float,
-) -> None:
+) -> int:
+    """Returns the number of rows written this turn (0 if throttled or empty)."""
     last = _last_tracking_write.get(session_id, 0.0)
     if (now_monotonic - last) * 1000.0 < sample_interval_ms:
-        return
+        return 0
     _last_tracking_write[session_id] = now_monotonic
     if not detections_payload:
-        return
+        return 0
     from .db import SessionLocal
     db = SessionLocal()
     try:
@@ -1422,6 +1761,7 @@ def _record_tracking_samples(
             )
         db.bulk_save_objects(rows)
         db.commit()
+        return len(rows)
     finally:
         db.close()
 
@@ -1518,10 +1858,30 @@ async def ws_detect(ws: WebSocket):
     cached_tracking: Optional[dict] = None
     cached_camera: Optional[dict] = None  # ADR 0048 — intrinsic/extrinsic + marker meta
 
+    # Bandwidth tracking — sum bytes per 1s window, emit metric per window.
+    bw_window_start = time.time()
+    bw_bytes_in_window = 0
+
+    # ADR 0004 — per-connection marker tracker for EMA smoothing + alive-window.
+    marker_tracker = tracker_mod.MarkerTracker()
+
+    # ADR 0015 — anchor drift monitor. Wakes up once the camera is calibrated
+    # and we know the anchor baseline + corner ids.
+    drift_monitor = drift_mod.AnchorDriftMonitor()
+    drift_configured = False
+
     try:
         while True:
             data = await ws.receive_bytes()
             now = time.time()
+            bw_bytes_in_window += len(data)
+            if now - bw_window_start >= 1.0:
+                obs.record_metric(
+                    "ws.bandwidth_mbps",
+                    round(bw_bytes_in_window * 8 / 1_000_000.0 / (now - bw_window_start), 3),
+                )
+                bw_window_start = now
+                bw_bytes_in_window = 0
             if now - last_state_reload > 1.0:
                 cached_active = _load_active_question()
                 active_formation = cached_active.get("formation") if cached_active else None
@@ -1537,7 +1897,12 @@ async def ws_detect(ws: WebSocket):
                 continue
 
             h, w = frame.shape[:2]
+            _detect_t0 = time.monotonic()
             results = detection.detect(frame)
+            _detect_ms = int((time.monotonic() - _detect_t0) * 1000)
+            obs.record_metric("detection.latency_ms", _detect_ms,
+                              resolution=f"{w}x{h}")
+            obs.record_metric("detection.markers_seen", len(results))
 
             # Split detections into person vs control.
             person_results = [d for d in results if not control_mod.is_control_id(d.aruco_id)]
@@ -1651,14 +2016,30 @@ async def ws_detect(ws: WebSocket):
                     }
                 detections_payload.append(entry)
 
+            # ADR 0004 — apply EMA smoothing + alive-window. Patches center_norm
+            # in place and appends ghost entries for markers that briefly
+            # missed detection. Must run BEFORE tracking samples so ghosts
+            # contribute (continuity over a 1 s blip) and BEFORE the WS payload.
+            detections_payload, ghost_count = marker_tracker.update_with_detections(
+                detections_payload, now,
+            )
+            if ghost_count:
+                obs.record_metric("detection.ghosts", ghost_count)
+
             # Tracking: drop a sample row per visible marker, throttled per session.
             if cached_tracking:
-                _record_tracking_samples(
+                wrote = _record_tracking_samples(
                     cached_tracking["id"],
                     cached_tracking["sample_interval_ms"],
                     detections_payload,
                     now,
                 )
+                if wrote:
+                    obs.record_metric(
+                        "tracking.sample_writes",
+                        wrote,
+                        session_id=cached_tracking["id"],
+                    )
 
             calibration_hint: Optional[dict] = None
             if cached_camera and corner_centers_px:
@@ -1669,6 +2050,30 @@ async def ws_detect(ws: WebSocket):
                     "floor_w_m": cached_camera["floor_w_m"],
                     "floor_h_m": cached_camera["floor_h_m"],
                 }
+
+            # ADR 0015 — anchor drift detection. Once the camera has stored
+            # corner-pixel baselines (saved at extrinsic-calibration time),
+            # configure the monitor and tick it each frame.
+            drift_events: list[dict] = []
+            baseline_px = (cached_camera or {}).get("anchor_baseline_px")
+            if cached_camera and baseline_px and corner_ids:
+                if not drift_configured:
+                    drift_monitor.configure(
+                        baseline_corners_px={k: tuple(v) for k, v in baseline_px.items()},
+                        corner_ids={k: int(v) for k, v in corner_ids.items()},
+                        frame_size_px=(w, h),
+                    )
+                    drift_configured = True
+                events = drift_monitor.update(corner_centers_px, now)
+                for ev in events:
+                    drift_events.append({
+                        "kind": ev.kind, "severity": ev.severity,
+                        "message": ev.message, "details": ev.details,
+                    })
+                    obs.record_metric(
+                        f"drift.{ev.kind}", 1,
+                        anchor=ev.details.get("anchor"),
+                    )
 
             payload = {
                 "ok": True,
@@ -1687,6 +2092,7 @@ async def ws_detect(ws: WebSocket):
                 "scene_world": scene_payload,
                 "calibration_hint": calibration_hint,
                 "control_events": control_events,
+                "drift_events": drift_events,
             }
             await ws.send_json(payload)
             # Mirror to /present and any other observers.
@@ -1821,6 +2227,12 @@ def _load_active_camera() -> Optional[dict]:
                 cam_pos = ext.camera_position_world().tolist()
             except Exception:
                 cam_pos = None
+        baseline = None
+        if c.anchor_baseline_px_json:
+            try:
+                baseline = json.loads(c.anchor_baseline_px_json)
+            except Exception:
+                baseline = None
         return {
             "id": c.id,
             "name": c.name,
@@ -1833,6 +2245,7 @@ def _load_active_camera() -> Optional[dict]:
             "floor_h_m": c.floor_rect_h_m,
             "corner_ids": c.corner_ids() or {},
             "camera_pos_world": cam_pos,
+            "anchor_baseline_px": baseline,
         }
     finally:
         db.close()
@@ -1856,6 +2269,37 @@ def admin():
 @app.get("/track")
 def track_page():
     return FileResponse(str(FRONTEND / "track.html"))
+
+
+# ---------- auth (ADR 0001) ----------
+
+@app.get("/login")
+def login_get(next: str = "/admin"):
+    return auth_mod.login_page(next_path=next)
+
+
+@app.post("/login")
+async def login_post(request: Request):
+    form = await request.form()
+    token = (form.get("token") or "").strip()
+    next_path = (form.get("next") or "/admin").strip() or "/admin"
+    expected = auth_mod.app_token()
+    if not expected:
+        # Auth is disabled — the form was a no-op. Redirect to next.
+        return RedirectResponse(next_path, status_code=303)
+    import hmac
+    if not hmac.compare_digest(token, expected):
+        return auth_mod.login_page(error="Invalid token", next_path=next_path)
+    response = RedirectResponse(next_path, status_code=303)
+    auth_mod.login_set_cookie(response, token)
+    return response
+
+
+@app.post("/logout")
+def logout_post():
+    response = RedirectResponse("/login", status_code=303)
+    auth_mod.logout(response)
+    return response
 
 
 @app.get("/track3d")
