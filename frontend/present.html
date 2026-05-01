@@ -87,6 +87,7 @@
   </div>
 
 <script type="module">
+import { audioCues } from "/static/lib/audio-cues.js";
 const blockEl = document.getElementById("block");
 const qTextEl = document.getElementById("qtext");
 const zonesEl = document.getElementById("zones");
@@ -107,9 +108,12 @@ function renderQuestion(active) {
     blockEl.textContent = "";
     qTextEl.textContent = "";
     emptyEl.hidden = false;
+    audioCues.silentMode(false);
     return;
   }
   emptyEl.hidden = true;
+  // Privilege walk: silence room-facing cues (no question-advance whoosh).
+  audioCues.silentMode(active.formation === "privilege_walk");
 
   const newId = active.id;
   if (newId !== lastQuestionId) {
@@ -119,6 +123,7 @@ function renderQuestion(active) {
       qTextEl.textContent = (active.position ? `${active.position}.  ` : "") + active.text;
       qTextEl.classList.remove("fade");
     }, 350);
+    if (lastQuestionId !== null) audioCues.play("question_advance");
     lastQuestionId = newId;
   } else {
     qTextEl.textContent = (active.position ? `${active.position}.  ` : "") + active.text;
