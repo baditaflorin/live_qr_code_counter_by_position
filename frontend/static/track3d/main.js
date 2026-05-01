@@ -424,11 +424,27 @@ function updateScene(world) {
     updateSpriteText(mesh.userData.sprite, label);
     lastSeen.set(key, now);
 
-    pushTrailPoint(p.person_id, x, y);
+    pushTrailPoint(`p:${p.person_id}`, x, y);
     if (dt_s > 0) bumpHeat(x, y, dt_s);
-    lastPersonPos.set(p.person_id, [x, y]);
+    lastEntityPos.set(`p:${p.person_id}`, {
+      pos: [x, y], label: p.person_name || `#${p.marker_ids.join("+")}`, kind: "person",
+    });
   }
-  refreshFollowDropdown(world.people || []);
+
+  // Unassigned markers — track them too so Follow / fly-to work even before
+  // they're assigned to a person in /admin.  Each gets its own trail bucket.
+  for (const m of world.markers || []) {
+    if (m.person_id != null) continue;  // already covered by the people loop
+    const [x, y, z] = m.world_xyz_m;
+    const ekey = `m:${m.aruco_id}`;
+    pushTrailPoint(ekey, x, y);
+    if (dt_s > 0) bumpHeat(x, y, dt_s);
+    lastEntityPos.set(ekey, {
+      pos: [x, y], label: `marker #${m.aruco_id}`, kind: "marker", aruco_id: m.aruco_id,
+    });
+  }
+
+  refreshFollowDropdown(world);
 
   // Heatmap mesh is expensive to rebuild — refresh at 1 Hz max.
   if (optHeatmap.checked && (!heatMesh || performance.now() - (heatMesh.userData?.builtAt || 0) > 1000)) {
@@ -441,17 +457,19 @@ function updateScene(world) {
     if (now - (lastSeen.get("m:" + id) || 0) > ageMs) {
       scene.remove(mesh); markerMeshes.delete(id);
       mesh.children.forEach((c) => { c.geometry?.dispose?.(); c.material?.dispose?.(); });
+      pruneTrail(`m:${id}`);
+      lastEntityPos.delete(`m:${id}`);
     }
   }
   for (const [key, mesh] of personMeshes) {
     if (now - (lastSeen.get(key) || 0) > ageMs) {
       scene.remove(mesh); personMeshes.delete(key);
-      const pid = parseInt(key.slice(2), 10);
-      pruneTrail(pid);
+      pruneTrail(key);
+      lastEntityPos.delete(key);
     }
   }
 
-  renderPeopleList(world.people || []);
+  renderPeopleList(world);
   renderCamerasList(world.cameras || []);
   renderEncounters(world.encounters);
   if (optStatus) {
@@ -483,25 +501,30 @@ function renderEncounters(enc) {
       <div class="muted">together for ${dur}</div>
     `;
     card.addEventListener("click", () => {
-      const a = lastPersonPos.get(e.a_id);
-      const b = lastPersonPos.get(e.b_id);
+      const a = lastEntityPos.get(`p:${e.a_id}`);
+      const b = lastEntityPos.get(`p:${e.b_id}`);
       if (!a || !b) return;
-      const mid = new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 1.0);
+      const mid = new THREE.Vector3((a.pos[0] + b.pos[0]) / 2, (a.pos[1] + b.pos[1]) / 2, 1.0);
       flyCameraTo(mid.clone().add(new THREE.Vector3(1.0, -2.5, 1.5)), mid);
     });
     encountersList.appendChild(card);
   }
 }
 
-function renderPeopleList(people) {
+function renderPeopleList(world) {
+  const people = world.people || [];
+  const markers = world.markers || [];
   const named = people.filter((p) => p.person_id != null);
-  if (!named.length) {
+  const unassigned = markers.filter((m) => m.person_id == null);
+
+  if (!named.length && !unassigned.length) {
     peopleList.textContent = "Nothing detected.";
     peopleList.className = "muted";
     return;
   }
   peopleList.className = "";
   peopleList.innerHTML = "";
+
   for (const p of named) {
     const card = document.createElement("div");
     card.className = "person-card";
@@ -514,22 +537,59 @@ function renderPeopleList(people) {
       <div>pos: (${x.toFixed(2)}, ${y.toFixed(2)}) m · yaw ${p.body_yaw_deg.toFixed(1)}°</div>
       <div class="muted">conf ${p.confidence.toFixed(2)}</div>
     `;
-    card.addEventListener("click", () => flyToPerson(p.person_id));
+    card.addEventListener("click", () => flyToEntity(`p:${p.person_id}`));
     card.addEventListener("dblclick", () => {
-      followingPersonId = p.person_id;
-      if (viewFollowSel) viewFollowSel.value = String(p.person_id);
+      followingEntityKey = `p:${p.person_id}`;
+      if (viewFollowSel) viewFollowSel.value = followingEntityKey;
     });
     peopleList.appendChild(card);
   }
+
+  if (unassigned.length) {
+    const hdr = document.createElement("div");
+    hdr.className = "muted";
+    hdr.style.cssText = "font-size:11px; margin: 8px 0 4px; padding-top: 6px; border-top: 1px solid #1f2a44;";
+    hdr.innerHTML = `Unassigned markers (${unassigned.length}) — assign to people in <a href="/admin#people">Admin → People</a>:`;
+    peopleList.appendChild(hdr);
+    for (const m of unassigned) {
+      const card = document.createElement("div");
+      card.className = "person-card";
+      card.style.cursor = "pointer";
+      card.title = "Click to fly camera here · double-click to follow";
+      const [x, y, z] = m.world_xyz_m;
+      card.innerHTML = `
+        <div class="nm">marker #${m.aruco_id} <span class="muted" style="font-size:11px; font-weight:normal;">→ fly</span></div>
+        <div class="muted">placement: ${m.placement} · pos (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}) m</div>
+        <div class="muted">yaw ${m.yaw_deg.toFixed(1)}° · reproj ${m.reproj_error_px.toFixed(2)} px</div>
+      `;
+      const ekey = `m:${m.aruco_id}`;
+      card.addEventListener("click", () => flyToEntity(ekey));
+      card.addEventListener("dblclick", () => {
+        followingEntityKey = ekey;
+        if (viewFollowSel) viewFollowSel.value = ekey;
+      });
+      peopleList.appendChild(card);
+    }
+  }
 }
 
-function refreshFollowDropdown(people) {
+function refreshFollowDropdown(world) {
   if (!viewFollowSel) return;
-  const named = people.filter((p) => p.person_id != null);
+  // Build a flat list of "follow targets": named people first, then any
+  // unassigned markers (so the operator can still focus on a marker before
+  // it's been assigned to a person in /admin).
+  const targets = [];
+  for (const p of world.people || []) {
+    if (p.person_id == null) continue;
+    targets.push({ key: `p:${p.person_id}`, label: p.person_name || `#${p.person_id}` });
+  }
+  for (const m of world.markers || []) {
+    if (m.person_id != null) continue;
+    targets.push({ key: `m:${m.aruco_id}`, label: `marker #${m.aruco_id}` });
+  }
+
   const currentVal = viewFollowSel.value;
-  const wantedKeys = new Set(named.map((p) => String(p.person_id)));
-  // Skip the rebuild if the option set hasn't changed (avoids killing the
-  // dropdown's open state mid-frame).
+  const wantedKeys = new Set(targets.map((t) => t.key));
   const haveKeys = new Set(
     [...viewFollowSel.options].map((o) => o.value).filter((v) => v !== "")
   );
@@ -538,13 +598,12 @@ function refreshFollowDropdown(people) {
   if (!changed) return;
 
   viewFollowSel.innerHTML = '<option value="">— none —</option>';
-  for (const p of named) {
+  for (const t of targets) {
     const opt = document.createElement("option");
-    opt.value = String(p.person_id);
-    opt.textContent = p.person_name || `#${p.person_id}`;
+    opt.value = t.key;
+    opt.textContent = t.label;
     viewFollowSel.appendChild(opt);
   }
-  // Restore selection if the followed person is still in view.
   if (wantedKeys.has(currentVal)) viewFollowSel.value = currentVal;
 }
 
@@ -650,12 +709,12 @@ async function refreshCalibrationBanner() {
 
 // Smooth camera transitions: when these are set, the animate loop lerps
 // camera.position and controls.target toward them with critical-damping
-// feel.  Setting `followingPersonId` keeps re-targeting on each frame so
+// feel.  Setting `followingEntityKey` keeps re-targeting on each frame so
 // the camera tracks a moving person.
 let cameraTargetPos    = null;  // THREE.Vector3 or null
 let cameraTargetLook   = null;  // THREE.Vector3 or null
-let followingPersonId  = null;  // person_id or null
-const lastPersonPos    = new Map();  // person_id -> [x, y]
+let followingEntityKey  = null;  // person_id or null
+const lastEntityPos    = new Map();  // "p:N" or "m:N" -> { pos: [x,y], label, kind, aruco_id? }
 
 const DEFAULT_CAM_POS  = new THREE.Vector3(6, -6, 6);
 const DEFAULT_LOOK     = () => floorMesh
@@ -668,13 +727,13 @@ function flyCameraTo(pos, look) {
 }
 
 function viewReset() {
-  followingPersonId = null;
+  followingEntityKey = null;
   if (viewFollowSel) viewFollowSel.value = "";
   flyCameraTo(DEFAULT_CAM_POS, DEFAULT_LOOK());
 }
 
 function viewTopDown() {
-  followingPersonId = null;
+  followingEntityKey = null;
   if (viewFollowSel) viewFollowSel.value = "";
   const target = DEFAULT_LOOK();
   // Hover above floor centre, looking straight down (with a tiny offset on
@@ -687,7 +746,7 @@ function viewTopDown() {
 }
 
 function viewFrameAll() {
-  followingPersonId = null;
+  followingEntityKey = null;
   if (viewFollowSel) viewFollowSel.value = "";
   // Build the bounding box of every visible marker + person.
   const points = [];
@@ -706,11 +765,13 @@ function viewFrameAll() {
   flyCameraTo(target.clone().add(offset), target);
 }
 
-function flyToPerson(personId) {
-  const xy = lastPersonPos.get(personId);
-  if (!xy) return;
-  const target = new THREE.Vector3(xy[0], xy[1], 1.0);
-  // 2.5 m back, 1.5 m up — comfortable shoulder-height-ish framing.
+function flyToEntity(entityKey) {
+  const ent = lastEntityPos.get(entityKey);
+  if (!ent) return;
+  const [x, y] = ent.pos;
+  // For people, target chest height; for raw markers, hover slightly above.
+  const z = ent.kind === "person" ? 1.0 : 0.4;
+  const target = new THREE.Vector3(x, y, z);
   const offset = new THREE.Vector3(1.0, -2.0, 1.5);
   flyCameraTo(target.clone().add(offset), target);
 }
@@ -723,21 +784,20 @@ renderer.domElement.addEventListener("dblclick", (ev) => {
   mouse.x = ((ev.clientX - r.left) / r.width)  * 2 - 1;
   mouse.y = -((ev.clientY - r.top)  / r.height) * 2 + 1;
   raycaster.setFromCamera(mouse, camera);
-  // Look for hits on any person mesh (or marker mesh as fallback).
+  // Look for hits on any person or marker mesh.  Each candidate carries the
+  // entity-key string so the fly target lifts cleanly through lastEntityPos.
   const candidates = [];
-  for (const [pid, mesh] of personMeshes) candidates.push({ mesh, pid });
-  for (const [aid, mesh] of markerMeshes) candidates.push({ mesh });
+  for (const [pkey, mesh] of personMeshes) candidates.push({ mesh, key: pkey });
+  for (const [aid,  mesh] of markerMeshes) candidates.push({ mesh, key: `m:${aid}` });
   const meshes = candidates.map((c) => c.mesh);
   const hits = raycaster.intersectObjects(meshes, true);
   if (!hits.length) return;
-  // Find which group (mesh) the intersected child belongs to.
   for (const hit of hits) {
     let g = hit.object;
     while (g && !candidates.find((c) => c.mesh === g)) g = g.parent;
     if (!g) continue;
     const c = candidates.find((cc) => cc.mesh === g);
-    if (c.pid != null) flyToPerson(c.pid);
-    else flyCameraTo(g.position.clone().add(new THREE.Vector3(0.5, -0.5, 1.0)), g.position.clone());
+    flyToEntity(c.key);
     break;
   }
 });
@@ -746,7 +806,7 @@ if (viewFrameBtn)  viewFrameBtn.addEventListener("click", viewFrameAll);
 if (viewTopBtn)    viewTopBtn.addEventListener("click", viewTopDown);
 if (viewResetBtn)  viewResetBtn.addEventListener("click", viewReset);
 if (viewFollowSel) viewFollowSel.addEventListener("change", () => {
-  followingPersonId = viewFollowSel.value ? parseInt(viewFollowSel.value, 10) : null;
+  followingEntityKey = viewFollowSel.value || null;
 });
 
 // ---------- size + animate ----------------------------------------------
@@ -763,14 +823,15 @@ onResize();
 function animate() {
   requestAnimationFrame(animate);
 
-  // Follow mode: re-aim at the latest position of the followed person.
-  if (followingPersonId != null) {
-    const xy = lastPersonPos.get(followingPersonId);
-    if (xy) {
-      const target = new THREE.Vector3(xy[0], xy[1], 1.0);
+  // Follow mode: re-aim at the latest position of the followed entity.
+  if (followingEntityKey) {
+    const ent = lastEntityPos.get(followingEntityKey);
+    if (ent) {
+      const z = ent.kind === "person" ? 1.0 : 0.4;
+      const target = new THREE.Vector3(ent.pos[0], ent.pos[1], z);
       cameraTargetLook = target;
-      // Maintain a constant offset behind the person — recomputed each frame
-      // so the camera glides with them rather than jumping.
+      // Constant offset behind the entity — recomputed each frame so the
+      // camera glides with them rather than jumping.
       cameraTargetPos = target.clone().add(new THREE.Vector3(1.0, -2.0, 1.5));
     }
   }
@@ -779,13 +840,13 @@ function animate() {
   // ~250 ms glide that feels quick but not jarring.
   if (cameraTargetPos) {
     camera.position.lerp(cameraTargetPos, 0.12);
-    if (camera.position.distanceTo(cameraTargetPos) < 0.005 && followingPersonId == null) {
+    if (camera.position.distanceTo(cameraTargetPos) < 0.005 && followingEntityKey == null) {
       cameraTargetPos = null;
     }
   }
   if (cameraTargetLook) {
     controls.target.lerp(cameraTargetLook, 0.12);
-    if (controls.target.distanceTo(cameraTargetLook) < 0.005 && followingPersonId == null) {
+    if (controls.target.distanceTo(cameraTargetLook) < 0.005 && followingEntityKey == null) {
       cameraTargetLook = null;
     }
   }
