@@ -4,8 +4,8 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
-    create_engine,
+    Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text,
+    UniqueConstraint, create_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
@@ -220,6 +220,12 @@ class Camera(Base):
     # at first-run from the active dictionary's top four reserved ids.
     corner_ids_json: Mapped[Optional[str]] = mapped_column(Text)
 
+    # ADR 0050+ — RTSP / IP camera URL. When set, a backend worker spawns on
+    # startup (and on update), pulls frames via OpenCV, and publishes to the
+    # SceneAggregator just like a browser /ws/detect client does.
+    rtsp_url: Mapped[Optional[str]] = mapped_column(String(500))
+    rtsp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     def K(self) -> Optional[list[list[float]]]:
@@ -244,6 +250,23 @@ class Camera(Base):
         return self.extrinsic_R_json is not None and self.extrinsic_t_json is not None
 
 
+class SceneRecording(Base):
+    """A recorded run of fused world-frame scenes.
+
+    Frames are written to JSONL at `{DATA_DIR}/recordings/{id}.jsonl`; one
+    line per fused scene, each with `rel_t` (seconds since recording start)
+    and the full `scene_world` payload that was sent to /ws/scene observers.
+    Replay just streams the file at original timing.
+    """
+    __tablename__ = "scene_recordings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    stopped_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    frame_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    file_size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
 def init_db() -> None:
     """Run Alembic upgrade head — replaces the previous hand-rolled migrations.
 
@@ -260,6 +283,7 @@ def init_db() -> None:
     _migrate_questions()
     _migrate_markers()
     _migrate_tracking_samples()
+    _migrate_cameras()
     # Alembic runs *before* seeding because the seed queries columns added by
     # 0002_metrics_audit_drift_baseline (cameras.anchor_baseline_px_json) —
     # on an existing prod DB, create_all() above doesn't ALTER, so the column
@@ -346,6 +370,19 @@ def _migrate_tracking_samples() -> None:
     }
     with engine.begin() as conn:
         cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(tracking_samples)").all()}
+        for col, ddl in cols_to_add.items():
+            if col not in cols:
+                conn.exec_driver_sql(ddl)
+
+
+def _migrate_cameras() -> None:
+    """RTSP ingest columns added after the baseline migration."""
+    cols_to_add = {
+        "rtsp_url":     "ALTER TABLE cameras ADD COLUMN rtsp_url VARCHAR(500)",
+        "rtsp_enabled": "ALTER TABLE cameras ADD COLUMN rtsp_enabled BOOLEAN NOT NULL DEFAULT 0",
+    }
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(cameras)").all()}
         for col, ddl in cols_to_add.items():
             if col not in cols:
                 conn.exec_driver_sql(ddl)

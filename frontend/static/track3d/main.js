@@ -534,16 +534,30 @@ function renderCamerasList(cams) {
 
 // ---------- WS observer plumbing ----------------------------------------
 
+// ?replay=ID&speed=N flips the viewer into playback mode (uses /ws/replay/ID).
+const urlParams = new URLSearchParams(location.search);
+const replayId = urlParams.get("replay");
+const replaySpeed = urlParams.get("speed") || "1";
+
 function openSceneWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/ws/scene`);
+  const path = replayId
+    ? `/ws/replay/${encodeURIComponent(replayId)}?speed=${encodeURIComponent(replaySpeed)}`
+    : `/ws/scene`;
+  const ws = new WebSocket(`${proto}://${location.host}${path}`);
   ws.onmessage = (ev) => {
     try {
       const msg = JSON.parse(ev.data);
+      if (msg.playback_done) {
+        statusEl.textContent = "playback done";
+        statusEl.style.background = "#7c3aed";
+        return;
+      }
       if (msg.ok && msg.scene_world) updateScene(msg.scene_world);
     } catch (_) {}
   };
   ws.onclose = () => {
+    if (replayId) return;  // don't auto-reconnect to a finished playback
     statusEl.textContent = "reconnecting…";
     statusEl.style.background = "#374151";
     setTimeout(openSceneWS, 1500);
@@ -608,6 +622,91 @@ animate();
 refreshCalibrationBanner();
 setInterval(refreshCalibrationBanner, 5000);
 openSceneWS();
+
+// ---------- recordings ----------------------------------------------------
+
+const recNameEl   = document.getElementById("rec-name");
+const recStartBtn = document.getElementById("rec-start");
+const recStopBtn  = document.getElementById("rec-stop");
+const recStatusEl = document.getElementById("rec-status");
+const recListEl   = document.getElementById("rec-list");
+
+async function refreshRecordings() {
+  try {
+    const data = await api("/api/recordings");
+    if (data.active) {
+      const a = data.active;
+      recStartBtn.disabled = true;
+      recStopBtn.disabled = false;
+      recStatusEl.innerHTML = `🔴 <strong>${a.name}</strong> · ${a.frames_written} frames · ${(a.bytes_written / 1024).toFixed(1)} KB · ${a.elapsed_s}s`;
+    } else {
+      recStartBtn.disabled = false;
+      recStopBtn.disabled = true;
+      recStatusEl.textContent = "";
+    }
+    if (!data.recordings.length) {
+      recListEl.textContent = "No recordings yet.";
+      recListEl.className = "muted";
+      return;
+    }
+    recListEl.className = "";
+    recListEl.innerHTML = "";
+    for (const r of data.recordings) {
+      const row = document.createElement("div");
+      row.className = "person-card";
+      const dur = r.frame_count ? `${r.frame_count} frames` : "(empty)";
+      const sizeKB = (r.file_size_bytes / 1024).toFixed(1);
+      row.innerHTML = `
+        <div class="nm">${r.name}${r.is_active ? " 🔴" : ""}</div>
+        <div class="muted" style="font-size:11px;">${dur} · ${sizeKB} KB · ${new Date(r.started_at).toLocaleString()}</div>
+        <div style="margin-top:4px;">
+          <a href="/track3d?replay=${r.id}" target="_blank"><button>▶ Play</button></a>
+          <a href="/track3d?replay=${r.id}&speed=4" target="_blank"><button>4× </button></a>
+          <button data-del="${r.id}" class="danger">Delete</button>
+        </div>
+      `;
+      row.querySelector("[data-del]").addEventListener("click", async (ev) => {
+        const id = ev.target.dataset.del;
+        if (!confirm("Delete this recording? File and DB row are removed.")) return;
+        await api(`/api/recordings/${id}`, { method: "DELETE" });
+        await refreshRecordings();
+      });
+      recListEl.appendChild(row);
+    }
+  } catch (e) {
+    recListEl.textContent = "Error: " + e.message;
+  }
+}
+
+recStartBtn.addEventListener("click", async () => {
+  const name = (recNameEl.value || "").trim() || `rec-${new Date().toISOString().slice(0, 19)}`;
+  try {
+    await api("/api/recordings/start", { method: "POST", body: { name } });
+    recNameEl.value = "";
+    await refreshRecordings();
+  } catch (e) {
+    alert("Start failed: " + e.message);
+  }
+});
+recStopBtn.addEventListener("click", async () => {
+  try {
+    await api("/api/recordings/stop", { method: "POST", body: {} });
+    await refreshRecordings();
+  } catch (e) {
+    alert("Stop failed: " + e.message);
+  }
+});
+
+if (replayId) {
+  // Replay mode: hide the recording controls + show a banner.
+  document.querySelector("#rec-start").style.display = "none";
+  document.querySelector("#rec-stop").style.display = "none";
+  document.querySelector("#rec-name").style.display = "none";
+  banner.innerHTML = `▶ Replaying recording <strong>#${replayId}</strong> at ${replaySpeed}× — <a href="/track3d">back to live</a>.`;
+}
+
+refreshRecordings();
+setInterval(refreshRecordings, 3000);
 
 optTrails.addEventListener("change", () => {
   for (const t of personTrails.values()) t.line.visible = optTrails.checked;
