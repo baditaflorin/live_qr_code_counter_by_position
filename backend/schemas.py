@@ -176,3 +176,55 @@ class CalibrationStatus(BaseModel):
 class ExtrinsicAutoIn(BaseModel):
     """Currently-detected pixel centers for the four floor-corner markers."""
     corners: dict[str, list[float]]  # {'tl': [px, py], ...}
+
+
+# ---------- ADR 0021 / 0022 / 0073 — participant cards --------------------
+
+class ParticipantCardIn(BaseModel):
+    """Create / update a participant card.
+
+    `params` is free-form per fire_model. For ``orientation`` it carries
+    ``orientation_axis`` (yaw|pitch|roll), ``orientation_buckets`` (list of
+    {center_deg, half_width_deg, value}), and optional stability tuning —
+    see ADR 0073.
+    """
+    aruco_id: int = Field(ge=0, le=9999)
+    name: str = ""
+    kit: str = "reaction"
+    action: str = ""
+    fire_model: str = "pulse"  # pulse | level | gesture | orientation
+    params: Optional[dict] = None
+    enabled: bool = True
+
+
+class ParticipantCardPatch(BaseModel):
+    name: Optional[str] = None
+    kit: Optional[str] = None
+    action: Optional[str] = None
+    fire_model: Optional[str] = None
+    params: Optional[dict] = None
+    enabled: Optional[bool] = None
+
+
+class ParticipantCardOut(BaseModel):
+    aruco_id: int
+    name: str
+    kit: str
+    action: str
+    fire_model: str
+    params: dict = {}
+    enabled: bool
+    created_at: datetime
+
+
+class ParticipantEventOut(BaseModel):
+    id: int
+    t: datetime
+    marker_aruco_id: int
+    held_by_aruco_id: Optional[int] = None
+    kit: str
+    action: str
+    fire_model: str
+    kind: str
+    value: Optional[str] = None
+    attribution_confidence: float

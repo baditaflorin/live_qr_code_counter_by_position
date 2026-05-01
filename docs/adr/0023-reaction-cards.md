@@ -46,3 +46,7 @@ Aggregate counts per question are stored on the snapshot, alongside the zone cou
 - **Coloured wristbands** — physical, simpler, but cannot be picked up or put down round to round.
 - **Phone-based reactions** — same data, loses the held-up-on-the-floor visual signal that the rest of the room can read.
 - **Just more zones** — works for the formal axes; doesn't help the *yes-but* shading the cards capture.
+- **One rotating card instead of eight** — see ADR 0073, which uses card *orientation* (yaw bucket) as the value channel. Filed as an experimental overlay rather than a replacement: if the rotation gesture is legible to participants, a future revision of this ADR may collapse some of the eight reactions into a single rotating card. Until that lands, the eight printed cards above remain the canonical kit.
+
+## Postscript
+ADR 0073 is the orientation-as-value experiment that lives next to this kit. It does not change the reaction-card allocation today; it adds a `fire_model: orientation` channel that one new card can use to carry several reaction values at once. Worth re-reading this ADR once the pilot data lands.

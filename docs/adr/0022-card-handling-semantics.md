@@ -21,10 +21,11 @@ A separate `ParticipantRouter` (introduced in ADR 0021) with **distinct triggeri
 
 - **Activation gate**: a participant card is "active" while it is detected for ≥ 0.4 s out of any sliding 0.6 s window. Faster than operator (1.5 s), but enough to filter momentary detection errors.
 - **Holder attribution**: when a participant card activates, the router associates it with the nearest detected *person marker* whose floor-position is within 0.8 m. If no person marker is nearby, the event is recorded as anonymous (some cards are intentionally pickable without identity — see ADR 0030 for the `anonymous_ok` flag per card).
-- **Fire model**: each card has one of three fire models in its row in `ParticipantCard.params_json`:
+- **Fire model**: each card has one of four fire models in its row in `ParticipantCard.params_json`:
   - `pulse` — fires once on activation, once on deactivation. (Reactions, intents.)
   - `level` — broadcasts continuous "active" status while held. (Composition modifiers like *silent* — true while raised, off when lowered.)
   - `gesture` — fires a single event after a card is raised and lowered within 5 s. (Promise, memory.)
+  - `orientation` — interprets the card's *rotation* as a discrete value (yes / no / unsure / …). Activation gate, attribution, and per-marker rate limit are unchanged; the **angle** decides which value fires. See ADR 0073 for bucket scheme, dead-zone rules, and the precision envelope. Added experimentally so 1 ID can express what `pulse` would spend N IDs on.
 - **Per-marker rate limit**: a single physical card cannot fire more than once per 1.5 s, even with multiple holders. Prevents marker-flicker from registering as two distinct events.
 - **Per-participant rate limit**: a single attributed person can not fire more than 6 events per minute across all cards. Prevents griefing or accidental dominance.
 - **Co-occurrence window**: cards raised by the *same person* within 1 s of each other are bundled into one composite event with multiple `cards: [...]`. ADR 0023+ feature combinations rely on this (e.g. *theme + intent* = "I want to speak about TRUST").
