@@ -40,4 +40,12 @@ initMarkers();
 initZones();
 initQuestions();
 initCameras();
-loadPeople();
+
+// Activate tab from URL hash, defaulting to people.
+const initialTab = window.location.hash.replace("#", "") || "people";
+activate(initialTab in TABS ? initialTab : "people");
+
+// Keep hash in sync when switching tabs.
+tabBtns.forEach((b) => b.addEventListener("click", () => {
+  history.replaceState(null, "", "#" + b.dataset.tab);
+}));

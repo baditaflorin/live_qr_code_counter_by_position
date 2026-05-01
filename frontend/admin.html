@@ -205,11 +205,11 @@
   <!-- CAMERAS — ADR 0048 + 0012 -->
   <section id="tab-cameras" hidden>
     <div class="panel">
-      <h3 style="margin-top:0;">Camera calibration — ADR 0048 (pose) + 0012 (extrinsic)</h3>
+      <h3 style="margin-top:0;">Camera calibration</h3>
       <p class="muted" style="margin: 4px 0 12px;">
-        Two one-time steps unlock 3D pose: <strong>(1) intrinsic</strong> from a printed ChArUco board,
-        then <strong>(2) extrinsic</strong> from four marker cards taped to the floor at known corners.
-        After both, every detected marker reports world XYZ + yaw/pitch/roll, and
+        Two one-time steps unlock 3D pose: <strong>(1) intrinsic</strong> — display the ChArUco board on a tablet
+        and wave it in front of the camera from different angles, then <strong>(2) extrinsic</strong> — tape four
+        marker cards to the floor corners. After both, every detected marker reports world XYZ + yaw/pitch/roll, and
         <a href="/track3d" target="_blank">/track3d</a> shows the scene in metres.
       </p>
       <div id="cameras-list"></div>
@@ -218,11 +218,25 @@
     <!-- Intrinsic calibration -->
     <div class="panel" id="intrinsic-panel" hidden>
       <h3 style="margin-top:0;">Step 1 — Intrinsic calibration (ChArUco board)</h3>
-      <div class="row" style="margin-bottom: 10px;">
-        <a href="/api/calibration/charuco-board.png" target="_blank">
-          <button>Download ChArUco board PNG</button>
-        </a>
-        <span class="muted">Print on A4 (or larger) and keep flat — a foam-board mount works best.</span>
+      <div class="row" style="margin-bottom: 14px; align-items: flex-start; gap: 20px;">
+        <div>
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">
+            Scan with a tablet → board fills the screen → wave in front of camera.
+          </div>
+          <img id="charuco-qr" src="/api/calibration/charuco-qr"
+               style="width:140px; height:140px; border-radius:6px; background:#fff; display:block;"
+               alt="QR code for ChArUco board" />
+          <div class="muted" style="font-size:11px; margin-top:4px; max-width:140px; line-height:1.4;">
+            or <a href="/charuco" target="_blank">open directly</a>
+          </div>
+        </div>
+        <div class="muted" style="font-size:12px; line-height:1.7; padding-top:4px;">
+          1. Scan the QR on a tablet (or phone in landscape)<br>
+          2. The board fills the screen — keep it flat and bright<br>
+          3. Press <strong>Start capture</strong> below, then slowly tilt/rotate<br>
+             the tablet so the camera sees ≥ 20 distinct angles<br>
+          4. Press <strong>Compute calibration</strong>
+        </div>
       </div>
       <div class="row">
         <label>Camera: <select id="ic-device-select"></select></label>
