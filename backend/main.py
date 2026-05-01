@@ -34,13 +34,15 @@ from . import (
     observability as obs,
     pose as pose_mod,
     pose_filter as pose_filter_mod,
+    rtsp_worker as rtsp_mod,
     scene as scene_mod,
+    scene_recorder as scene_recorder_mod,
     scene_state as scene_state_mod,
     tracking as tracking_mod,
 )
 from .db import (
-    AuditLog, Camera, ControlMarker, Marker, Metric, Person, Question, SessionLocal,
-    TrackingSample, TrackingSession, Vote, Zone, get_db, init_db,
+    AuditLog, Camera, ControlMarker, Marker, Metric, Person, Question, SceneRecording,
+    SessionLocal, TrackingSample, TrackingSession, Vote, Zone, get_db, init_db,
 )
 from .schemas import (
     CalibrationStatus, CameraOut, CameraSettingsIn, ExtrinsicAutoIn,
@@ -68,6 +70,13 @@ app.add_middleware(obs.AuditMiddleware)
 @app.on_event("startup")
 async def _start_observability() -> None:
     obs.start_background_flush()
+
+
+@app.on_event("startup")
+async def _start_rtsp_workers() -> None:
+    """Spawn one OpenCV+RTSP ingest worker per camera with rtsp_enabled=True."""
+    rtsp_mod.get_registry().set_marker_meta_loader(_marker_meta_for)
+    await rtsp_mod.get_registry().reconcile()
 
 
 @app.on_event("shutdown")
@@ -155,6 +164,8 @@ def _camera_to_out(c: Camera) -> CameraOut:
         R_world_to_camera=c.R(),
         t_world_to_camera=c.t(),
         camera_position_world_m=cam_pos,
+        rtsp_url=c.rtsp_url,
+        rtsp_enabled=bool(c.rtsp_enabled),
         created_at=c.created_at,
     )
 
@@ -1007,8 +1018,21 @@ def update_camera(camera_id: int, payload: CameraSettingsIn, db: Session = Depen
             if k not in payload.corner_ids:
                 raise HTTPException(400, f"corner_ids missing key '{k}'")
         c.corner_ids_json = json.dumps({k: int(payload.corner_ids[k]) for k in ("tl", "tr", "br", "bl")})
+    rtsp_changed = False
+    if payload.rtsp_url is not None:
+        new_url = payload.rtsp_url.strip() or None
+        if new_url != c.rtsp_url:
+            c.rtsp_url = new_url
+            rtsp_changed = True
+    if payload.rtsp_enabled is not None and bool(payload.rtsp_enabled) != bool(c.rtsp_enabled):
+        c.rtsp_enabled = bool(payload.rtsp_enabled)
+        rtsp_changed = True
     db.commit()
     db.refresh(c)
+    if rtsp_changed:
+        # Reconcile workers against the new DB state — picks up start, stop,
+        # and url-change cases without separate plumbing.
+        asyncio.create_task(rtsp_mod.get_registry().reconcile())
     return _camera_to_out(c)
 
 
@@ -2212,12 +2236,15 @@ async def ws_scene(ws: WebSocket):
     await ws.accept()
     aggregator = scene_state_mod.get_aggregator()
     interactions = interactions_mod.get_tracker()
+    recorder = scene_recorder_mod.get_recorder()
     try:
         while True:
             v = aggregator.version
             scene = await aggregator.fused_scene()
             now = time.time()
             new_events = interactions.update(scene.get("people", []), now)
+            # If a recording is active, capture this fused scene tick.
+            recorder.write(scene)
             scene["encounters"] = {
                 "live": [
                     {
@@ -2250,6 +2277,88 @@ async def ws_scene(ws: WebSocket):
             await ws.send_json({"ok": False, "error": str(e)})
         except Exception:
             pass
+
+
+# ---------- scene recordings (replay) ----------
+
+@app.get("/api/recordings")
+def list_recordings(db: Session = Depends(get_db)):
+    rows = db.execute(select(SceneRecording).order_by(SceneRecording.id.desc())).scalars().all()
+    active = scene_recorder_mod.get_recorder().active_info
+    return {
+        "recordings": [
+            {
+                "id": r.id, "name": r.name,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "stopped_at": r.stopped_at.isoformat() if r.stopped_at else None,
+                "frame_count": r.frame_count,
+                "file_size_bytes": r.file_size_bytes,
+                "is_active": active is not None and active["recording_id"] == r.id,
+            }
+            for r in rows
+        ],
+        "active": active,
+    }
+
+
+@app.post("/api/recordings/start")
+async def start_recording(payload: dict):
+    name = (payload or {}).get("name", "")
+    try:
+        return await scene_recorder_mod.get_recorder().start(str(name or ""))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/recordings/stop")
+async def stop_recording():
+    info = await scene_recorder_mod.get_recorder().stop()
+    if info is None:
+        raise HTTPException(409, "no recording is active")
+    return info
+
+
+@app.delete("/api/recordings/{recording_id}")
+def delete_recording(recording_id: int):
+    ok = scene_recorder_mod.delete_recording(recording_id)
+    if not ok:
+        raise HTTPException(404, "recording not found")
+    return {"ok": True}
+
+
+@app.websocket("/ws/replay/{recording_id}")
+async def ws_replay(ws: WebSocket, recording_id: int):
+    """Stream a recorded session through the same Three.js viewer.
+
+    Optional `?speed=1.5` query param plays back faster (clamped 0.1-10).
+    Each message has the same shape as `/ws/scene` so the frontend just
+    swaps WS URLs to flip between live and replay mode.
+    """
+    await ws.accept()
+    speed = 1.0
+    try:
+        speed = float(ws.query_params.get("speed", "1.0"))
+    except (ValueError, TypeError):
+        pass
+    try:
+        async for row in scene_recorder_mod.stream_for_playback(recording_id, speed=speed):
+            await ws.send_json({"ok": True, "scene_world": row["scene_world"], "rel_t": row["rel_t"]})
+        # Signal end-of-stream so the viewer can show "playback finished".
+        await ws.send_json({"ok": True, "playback_done": True})
+    except WebSocketDisconnect:
+        return
+    except Exception as e:  # noqa: BLE001
+        try:
+            await ws.send_json({"ok": False, "error": str(e)})
+        except Exception:
+            pass
+
+
+# ---------- RTSP ingest status ----------
+
+@app.get("/api/rtsp/status")
+def rtsp_status():
+    return {"workers": rtsp_mod.get_registry().status()}
 
 
 def _load_zones_dict(formation: Optional[str] = None) -> list[dict]:

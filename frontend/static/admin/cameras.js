@@ -69,6 +69,37 @@ function renderList() {
         + `reproj err ${c.extrinsic_reproj_error_px?.toFixed(3)} px`));
     }
 
+    // RTSP / IP-camera ingest row.
+    const rtspRow = el("div", { class: "row", style: { marginTop: "8px", fontSize: "13px" } });
+    const rtspInput = el("input", {
+      type: "text",
+      value: c.rtsp_url || "",
+      placeholder: "rtsp://user:pass@host/stream",
+      style: { flex: "1", minWidth: "320px" },
+    });
+    const rtspChk = el("input", {
+      type: "checkbox",
+      checked: c.rtsp_enabled,
+      title: "Spawn server-side ingest worker",
+    });
+    const rtspLabel = el("label", { style: { fontSize: "12px" } }, rtspChk, " enable");
+    const rtspSave = el("button", {
+      onclick: async () => {
+        try {
+          await api(`/api/cameras/${c.id}`, {
+            method: "PUT",
+            body: { rtsp_url: rtspInput.value || null, rtsp_enabled: rtspChk.checked },
+          });
+          await loadCameras();
+        } catch (e) { alert("Save failed: " + e.message); }
+      },
+    }, "Save RTSP");
+    rtspRow.appendChild(el("span", { style: { fontWeight: "600", minWidth: "50px" } }, "RTSP:"));
+    rtspRow.appendChild(rtspInput);
+    rtspRow.appendChild(rtspLabel);
+    rtspRow.appendChild(rtspSave);
+    row.appendChild(rtspRow);
+
     const actions = el("div", { class: "row", style: { marginTop: "8px" } });
     actions.appendChild(el("button", {
       onclick: () => { activeCameraId = c.id; loadCameras(); },
