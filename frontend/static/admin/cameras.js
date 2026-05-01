@@ -265,8 +265,10 @@ function syncExtrinsicForm(cam) {
   const ids = cam.corner_ids || {};
   document.getElementById("ex-corner-ids").textContent =
     `TL=${ids.tl}  TR=${ids.tr}  BR=${ids.br}  BL=${ids.bl}`;
-  const a = document.getElementById("ex-print-corners");
-  a.href = `/api/markers/pdf?ids=${ids.tl},${ids.tr},${ids.br},${ids.bl}`;
+  // Print-sheet href is the static /api/calibration/corner-markers-pdf endpoint
+  // (set in admin.html). It renders the four reserved corner ids directly from
+  // the active camera, which the markers/pdf endpoint can't do because corner
+  // ids aren't person-marker rows.
 }
 
 async function saveExtrinsicSettings() {
