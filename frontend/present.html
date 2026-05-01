@@ -170,6 +170,31 @@ function renderZones(zones, counts) {
   zoneRefs = newRefs;
 }
 
+let _ctrlTimer = null;
+function handleControlEvents(events) {
+  if (!Array.isArray(events) || !events.length) return;
+  for (const ev of events) {
+    audioCues.play("control_card");
+    let banner = document.getElementById("ctrl-banner");
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "ctrl-banner";
+      banner.style.cssText = `
+        position: fixed; left: 50%; bottom: 8vh; transform: translateX(-50%);
+        background: var(--accent); color: #052e1a; padding: 1.4vh 2.4vw;
+        font-size: 2.2vw; font-weight: 700; border-radius: 12px;
+        z-index: 9999; transition: opacity 0.4s ease;
+        font-family: "DejaVu Sans", "Helvetica", sans-serif;
+      `;
+      document.body.appendChild(banner);
+    }
+    banner.textContent = `▶ ${ev.label || ev.action}`;
+    banner.style.opacity = "1";
+    if (_ctrlTimer) clearTimeout(_ctrlTimer);
+    _ctrlTimer = setTimeout(() => { banner.style.opacity = "0"; }, 2200);
+  }
+}
+
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws/observe`);
@@ -179,6 +204,7 @@ function connect() {
     if (!msg.ok) return;
     renderQuestion(msg.active_question);
     renderZones(msg.zones || [], msg.zone_counts || {});
+    handleControlEvents(msg.control_events);
   };
   ws.onclose = () => setTimeout(connect, 2000);
   ws.onerror = () => { try { ws.close(); } catch {} };

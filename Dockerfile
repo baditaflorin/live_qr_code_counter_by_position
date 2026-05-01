@@ -17,6 +17,7 @@ RUN pip install -r requirements.txt
 
 COPY backend ./backend
 COPY frontend ./frontend
+COPY alembic.ini ./alembic.ini
 
 RUN mkdir -p /data
 ENV DATA_DIR=/data

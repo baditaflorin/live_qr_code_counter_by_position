@@ -92,6 +92,50 @@ class Vote(Base):
     )
 
 
+class Metric(Base):
+    """ADR 0036 — system-self telemetry. Append-only (name, value, tags) series.
+
+    Hot-path callers batch these via record_metric() in main.py.
+    """
+    __tablename__ = "metrics"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    t: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    name: Mapped[str] = mapped_column(String(80), index=True)
+    value: Mapped[float] = mapped_column(Float)
+    tags_json: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class AuditLog(Base):
+    """ADR 0009 — one row per successful state-mutating request to /api/*.
+
+    Captures who (token-hash), what (method + path), when, and a small
+    redacted body summary so post-incident review can answer 'who deleted
+    question 17 during the workshop?'.
+    """
+    __tablename__ = "audit_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    t: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    actor_token_hash: Mapped[Optional[str]] = mapped_column(String(16), index=True)
+    method: Mapped[str] = mapped_column(String(10))
+    path: Mapped[str] = mapped_column(String(400), index=True)
+    query: Mapped[Optional[str]] = mapped_column(String(800))
+    status_code: Mapped[int] = mapped_column(Integer)
+    request_id: Mapped[Optional[str]] = mapped_column(String(36))
+    body_summary: Mapped[Optional[str]] = mapped_column(Text)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
+
+
+class ControlMarker(Base):
+    """Control markers — IDs reserved at the top of the dictionary that fire
+    actions instead of representing people. Implements ADR 0011 + ADR 0014."""
+    __tablename__ = "control_markers"
+    aruco_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    enabled: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class TrackingSession(Base):
     """A 'who-was-where, with whom, for how long' recording window.
 
@@ -164,6 +208,10 @@ class Camera(Base):
     extrinsic_t_json: Mapped[Optional[str]] = mapped_column(Text)  # 3-vec translation, world->camera
     extrinsic_calibrated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     extrinsic_reproj_error_px: Mapped[Optional[float]] = mapped_column(Float)
+    # ADR 0015 — image-pixel positions of the four anchors at calibration
+    # time. JSON {"tl": [px, py], "tr": [px, py], ...}. Drift detector
+    # compares live anchor centres to this baseline.
+    anchor_baseline_px_json: Mapped[Optional[str]] = mapped_column(Text)
 
     # The four-corner floor rectangle (ADR 0012).
     floor_rect_w_m: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
@@ -197,11 +245,56 @@ class Camera(Base):
 
 
 def init_db() -> None:
+    """Run Alembic upgrade head — replaces the previous hand-rolled migrations.
+
+    On a fresh DB the baseline migration (0001) creates every table from
+    SQLAlchemy metadata. Existing prod DBs already have the tables and a
+    bootstrap step stamps them at the baseline so subsequent migrations apply
+    cleanly. The legacy hand-migrations stay in place as a safety net for
+    any DB that hasn't been stamped yet.
+    """
+    # Legacy migrations first — they're idempotent ALTER TABLE ... ADD COLUMN
+    # with a column-exists check, so running them on an already-migrated DB
+    # is a no-op. They cover the schema deltas before Alembic landed.
     Base.metadata.create_all(engine)
     _migrate_questions()
     _migrate_markers()
     _migrate_tracking_samples()
     _seed_default_camera()
+    _alembic_upgrade()
+
+
+def _alembic_upgrade() -> None:
+    """Run `alembic upgrade head` programmatically, with a one-shot stamp for
+    pre-Alembic prod databases (so the baseline migration's create_all
+    becomes a no-op)."""
+    try:
+        from alembic.config import Config
+        from alembic import command
+    except ImportError:
+        # Alembic not installed (e.g. running in a slim test environment) —
+        # legacy hand-migrations above already brought the schema up.
+        return
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg_path = os.path.join(here, "alembic.ini")
+    if not os.path.exists(cfg_path):
+        return
+    cfg = Config(cfg_path)
+    cfg.set_main_option("sqlalchemy.url", str(engine.url))
+    # Detect a pre-Alembic prod DB (has tables but no alembic_version row) and
+    # stamp it at baseline so upgrade head is a clean no-op.
+    with engine.begin() as conn:
+        has_alembic = conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'"
+        ).fetchone()
+        has_questions = conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='questions'"
+        ).fetchone()
+        needs_stamp = bool(has_questions) and not bool(has_alembic)
+    if needs_stamp:
+        command.stamp(cfg, "0001")
+    command.upgrade(cfg, "head")
 
 
 def _migrate_questions() -> None:

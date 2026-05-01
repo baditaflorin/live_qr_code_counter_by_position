@@ -279,6 +279,10 @@ def calibrate_extrinsic(
     cam.extrinsic_t_json = json.dumps(extrinsic.t.tolist())
     cam.extrinsic_calibrated_at = datetime.utcnow()
     cam.extrinsic_reproj_error_px = err
+    # ADR 0015 — capture the anchor pixel positions as the drift baseline.
+    cam.anchor_baseline_px_json = json.dumps(
+        {k: [float(v[0]), float(v[1])] for k, v in detected_corner_centers.items()}
+    )
     db.commit()
     return {
         "ok": True,
