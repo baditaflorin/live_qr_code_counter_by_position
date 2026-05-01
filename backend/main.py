@@ -632,6 +632,69 @@ def markers_pdf(
     )
 
 
+# ---------- resolution / marker-size feasibility (ADR 0031) ----------
+
+@app.get("/api/feasibility")
+def feasibility(
+    image_w_px: int = 1920,
+    image_h_px: int = 1080,
+    marker_size_m: float = 0.15,
+    floor_w_m: float = 5.0,
+    floor_h_m: float = 4.0,
+):
+    """Pure-math estimate of pixels-per-marker-side at the corners of a
+    rectangular floor area. Surfaces the per-cell threshold from ADR 0031
+    so the operator can see whether their setup will detect cleanly before
+    they show up at the venue.
+
+    The floor is assumed to fill the camera's view roughly at center and
+    pinch-toward-the-back per ADR 0003's homography. We approximate corners
+    as 0.7× and 1.0× of the centre's pixels-per-metre — accurate enough to
+    surface a 'this won't detect at the back' warning, not for fine work.
+    """
+    if image_w_px <= 0 or image_h_px <= 0 or marker_size_m <= 0 or floor_w_m <= 0:
+        raise HTTPException(400, "All dimensions must be positive")
+    # Pixels per metre at frame centre, assuming the floor fills frame width.
+    px_per_m_centre = image_w_px / floor_w_m
+    # Marker pixel side at the centre (roughly), and at the foreshortened back edge.
+    centre_px = px_per_m_centre * marker_size_m
+    back_px = centre_px * 0.65   # back edge — perspective makes markers smaller
+    front_px = centre_px * 1.05  # front edge — slightly bigger
+
+    from .badges import CELL_MIN_PX_PER_SIDE
+    per_cell_recommendations = CELL_MIN_PX_PER_SIDE
+
+    # 40 px per marker side is the conservative floor.
+    PERSON_FLOOR = 40
+    ok_centre = centre_px >= PERSON_FLOOR
+    ok_back   = back_px   >= PERSON_FLOOR
+    verdict = (
+        "comfortable" if ok_back and back_px >= 60 else
+        "marginal"    if ok_back else
+        "back-of-room won't detect; print bigger markers or add a camera"
+    )
+
+    return {
+        "image_size_px": [image_w_px, image_h_px],
+        "marker_size_m": marker_size_m,
+        "floor_size_m": [floor_w_m, floor_h_m],
+        "px_per_marker_side": {
+            "front":  round(front_px,  1),
+            "centre": round(centre_px, 1),
+            "back":   round(back_px,   1),
+        },
+        "person_floor_px": PERSON_FLOOR,
+        "verdict": verdict,
+        "per_cell_min_px": per_cell_recommendations,
+        "advice": [
+            "Centre detects fine if you see ≥ 40 px/marker; ≥ 60 px is comfortable.",
+            "If the back of the room scores < 40, options: (1) print bigger markers, "
+            "(2) higher camera resolution (4K), (3) add a second camera covering the back.",
+            "Stylised cell ornaments (hexagon/six_star/leaf/rosette) need 50–60+ px per side.",
+        ],
+    }
+
+
 # ---------- cameras + calibration (ADR 0048 + 0012) ----------
 
 @app.get("/api/cameras", response_model=list[CameraOut])
