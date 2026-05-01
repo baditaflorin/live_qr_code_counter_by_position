@@ -11,19 +11,29 @@ import cv2
 import numpy as np
 import qrcode
 from fastapi import (
-    Depends, FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect,
+    Depends, FastAPI, HTTPException, Query, Request, Response,
+    WebSocket, WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from . import badges as badge_gen, detection, markers as marker_gen, tracking as tracking_mod
+from . import (
+    badges as badge_gen,
+    calibration as calibration_mod,
+    detection,
+    markers as marker_gen,
+    pose as pose_mod,
+    scene as scene_mod,
+    tracking as tracking_mod,
+)
 from .db import (
-    Marker, Person, Question, TrackingSample, TrackingSession, Vote, Zone,
+    Camera, Marker, Person, Question, TrackingSample, TrackingSession, Vote, Zone,
     get_db, init_db,
 )
 from .schemas import (
+    CalibrationStatus, CameraOut, CameraSettingsIn, ExtrinsicAutoIn,
     MarkerAssign, MarkerCreateBatch, MarkerOut, PersonIn, PersonOut, QuestionBulkIn,
     QuestionIn, QuestionOut, TrackingSessionIn, TrackingSessionOut, VoteOut,
     ZoneIn, ZoneOut, ZonePatch,
@@ -57,7 +67,56 @@ def _marker_to_out(m: Marker) -> MarkerOut:
         dictionary=m.dictionary,
         person_id=m.person_id,
         person_name=m.person.name if m.person else None,
+        placement=m.placement or "hat",
         created_at=m.created_at,
+    )
+
+
+VALID_PLACEMENTS = {"hat", "chest", "back", "wrist", "accessory"}
+
+
+def _normalize_placement(p: Optional[str]) -> str:
+    """ADR 0049 — coerce + validate the placement field."""
+    if p is None:
+        return "hat"
+    p = p.strip().lower()
+    if p not in VALID_PLACEMENTS:
+        raise HTTPException(400, f"Invalid placement '{p}'. Allowed: {sorted(VALID_PLACEMENTS)}")
+    return p
+
+
+def _camera_to_out(c: Camera) -> CameraOut:
+    cam_pos: Optional[list[float]] = None
+    if c.has_extrinsic():
+        try:
+            ext = pose_mod.Extrinsic(
+                R=np.array(c.R(), dtype=np.float64),
+                t=np.array(c.t(), dtype=np.float64),
+            )
+            cam_pos = ext.camera_position_world().tolist()
+        except Exception:
+            cam_pos = None
+    return CameraOut(
+        id=c.id,
+        name=c.name,
+        marker_size_m=c.marker_size_m,
+        floor_rect_w_m=c.floor_rect_w_m,
+        floor_rect_h_m=c.floor_rect_h_m,
+        corner_ids=c.corner_ids() or {},
+        intrinsic_calibrated=c.has_intrinsic(),
+        intrinsic_calibrated_at=c.intrinsic_calibrated_at,
+        intrinsic_reproj_error_px=c.intrinsic_reproj_error_px,
+        intrinsic_image_w=c.intrinsic_image_w,
+        intrinsic_image_h=c.intrinsic_image_h,
+        extrinsic_calibrated=c.has_extrinsic(),
+        extrinsic_calibrated_at=c.extrinsic_calibrated_at,
+        extrinsic_reproj_error_px=c.extrinsic_reproj_error_px,
+        K=c.K(),
+        dist=c.dist(),
+        R_world_to_camera=c.R(),
+        t_world_to_camera=c.t(),
+        camera_position_world_m=cam_pos,
+        created_at=c.created_at,
     )
 
 
@@ -170,6 +229,7 @@ def create_marker_batch(payload: MarkerCreateBatch, db: Session = Depends(get_db
             f"(next id {next_id}, {remaining} remaining). Switch ARUCO_DICTIONARY in docker-compose.yml "
             f"to a larger one (e.g. DICT_4X4_250) and rebuild.",
         )
+    placement = _normalize_placement(payload.placement)
     created: list[Marker] = []
     for _ in range(payload.count):
         new_id = _next_aruco_id(db)
@@ -177,6 +237,7 @@ def create_marker_batch(payload: MarkerCreateBatch, db: Session = Depends(get_db
             aruco_id=new_id,
             dictionary=detection.get_dictionary_name(),
             person_id=payload.person_id,
+            placement=placement,
         )
         db.add(m)
         db.flush()
@@ -193,6 +254,8 @@ def assign_marker(aruco_id: int, payload: MarkerAssign, db: Session = Depends(ge
     if payload.person_id is not None and not db.get(Person, payload.person_id):
         raise HTTPException(400, "Unknown person_id")
     m.person_id = payload.person_id
+    if payload.placement is not None:
+        m.placement = _normalize_placement(payload.placement)
     db.commit()
     db.refresh(m)
     return _marker_to_out(m)
@@ -331,6 +394,165 @@ def markers_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": 'attachment; filename="markers.pdf"'},
     )
+
+
+# ---------- cameras + calibration (ADR 0048 + 0012) ----------
+
+@app.get("/api/cameras", response_model=list[CameraOut])
+def list_cameras(db: Session = Depends(get_db)):
+    rows = db.execute(select(Camera).order_by(Camera.id)).scalars().all()
+    return [_camera_to_out(c) for c in rows]
+
+
+@app.get("/api/cameras/{camera_id}", response_model=CameraOut)
+def get_camera(camera_id: int, db: Session = Depends(get_db)):
+    c = db.get(Camera, camera_id)
+    if not c:
+        raise HTTPException(404, "Camera not found")
+    return _camera_to_out(c)
+
+
+@app.put("/api/cameras/{camera_id}", response_model=CameraOut)
+def update_camera(camera_id: int, payload: CameraSettingsIn, db: Session = Depends(get_db)):
+    c = db.get(Camera, camera_id)
+    if not c:
+        raise HTTPException(404, "Camera not found")
+    if payload.name is not None:
+        c.name = payload.name.strip() or c.name
+    if payload.marker_size_m is not None:
+        c.marker_size_m = float(payload.marker_size_m)
+    if payload.floor_rect_w_m is not None:
+        c.floor_rect_w_m = float(payload.floor_rect_w_m)
+    if payload.floor_rect_h_m is not None:
+        c.floor_rect_h_m = float(payload.floor_rect_h_m)
+    if payload.corner_ids is not None:
+        for k in ("tl", "tr", "br", "bl"):
+            if k not in payload.corner_ids:
+                raise HTTPException(400, f"corner_ids missing key '{k}'")
+        c.corner_ids_json = json.dumps({k: int(payload.corner_ids[k]) for k in ("tl", "tr", "br", "bl")})
+    db.commit()
+    db.refresh(c)
+    return _camera_to_out(c)
+
+
+@app.delete("/api/cameras/{camera_id}/intrinsic")
+def clear_intrinsic(camera_id: int, db: Session = Depends(get_db)):
+    """Forget the intrinsic calibration — operator will redo ChArUco capture."""
+    c = db.get(Camera, camera_id)
+    if not c:
+        raise HTTPException(404, "Camera not found")
+    c.K_json = None
+    c.dist_json = None
+    c.intrinsic_calibrated_at = None
+    c.intrinsic_reproj_error_px = None
+    c.intrinsic_image_w = None
+    c.intrinsic_image_h = None
+    # Extrinsic depends on intrinsic, so clear it too.
+    c.extrinsic_R_json = None
+    c.extrinsic_t_json = None
+    c.extrinsic_calibrated_at = None
+    c.extrinsic_reproj_error_px = None
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/cameras/{camera_id}/extrinsic")
+def clear_extrinsic(camera_id: int, db: Session = Depends(get_db)):
+    c = db.get(Camera, camera_id)
+    if not c:
+        raise HTTPException(404, "Camera not found")
+    c.extrinsic_R_json = None
+    c.extrinsic_t_json = None
+    c.extrinsic_calibrated_at = None
+    c.extrinsic_reproj_error_px = None
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/calibration/charuco-board.png")
+def charuco_board_png(size_px: int = 1500):
+    """Printable ChArUco board.  Print on A4 (or larger), keep flat."""
+    png = pose_mod.render_charuco_board_png(detection.get_dictionary(), size_px=size_px)
+    return Response(content=png, media_type="image/png")
+
+
+@app.post("/api/cameras/{camera_id}/calibration/intrinsic/start", response_model=CalibrationStatus)
+def start_intrinsic_calibration(camera_id: int, db: Session = Depends(get_db)):
+    if not db.get(Camera, camera_id):
+        raise HTTPException(404, "Camera not found")
+    sess = calibration_mod.start_session(camera_id)
+    return CalibrationStatus(**sess.status())
+
+
+@app.get("/api/cameras/{camera_id}/calibration/intrinsic/{session_id}", response_model=CalibrationStatus)
+def get_intrinsic_status(camera_id: int, session_id: str):
+    sess = calibration_mod.get_session(session_id)
+    if not sess or sess.camera_id != camera_id:
+        raise HTTPException(404, "Calibration session not found")
+    return CalibrationStatus(**sess.status())
+
+
+@app.post("/api/cameras/{camera_id}/calibration/intrinsic/{session_id}/frame", response_model=CalibrationStatus)
+async def add_intrinsic_frame(camera_id: int, session_id: str, request: Request):
+    """Accept one JPEG frame (raw bytes in body).  Stateless from the caller's
+    point of view — the server tracks accepted views in the session."""
+    sess = calibration_mod.get_session(session_id)
+    if not sess or sess.camera_id != camera_id:
+        raise HTTPException(404, "Calibration session not found")
+    raw = await request.body()
+    if not raw:
+        raise HTTPException(400, "Empty frame body")
+    arr = np.frombuffer(raw, dtype=np.uint8)
+    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(400, "Could not decode JPEG")
+    status = calibration_mod.add_frame(session_id, frame)
+    if "error" in status:
+        raise HTTPException(400, status["error"])
+    return CalibrationStatus(**status)
+
+
+@app.post("/api/cameras/{camera_id}/calibration/intrinsic/{session_id}/finish")
+def finish_intrinsic_calibration(camera_id: int, session_id: str, db: Session = Depends(get_db)):
+    sess = calibration_mod.get_session(session_id)
+    if not sess or sess.camera_id != camera_id:
+        raise HTTPException(404, "Calibration session not found")
+    result = calibration_mod.finish(session_id, db)
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@app.delete("/api/cameras/{camera_id}/calibration/intrinsic/{session_id}")
+def cancel_intrinsic_calibration(camera_id: int, session_id: str):
+    calibration_mod.discard_session(session_id)
+    return {"ok": True}
+
+
+@app.post("/api/cameras/{camera_id}/calibration/extrinsic/auto")
+def auto_calibrate_extrinsic(camera_id: int, payload: ExtrinsicAutoIn, db: Session = Depends(get_db)):
+    """ADR 0012 — solve extrinsic from the four floor-corner markers.
+
+    The browser submits the *current pixel centers* of the four corner
+    markers (from the live detection overlay).  This way the calibration
+    happens with the exact same lens that streams frames live.
+    """
+    c = db.get(Camera, camera_id)
+    if not c:
+        raise HTTPException(404, "Camera not found")
+    if not c.has_intrinsic():
+        raise HTTPException(409, "Run intrinsic calibration first.")
+    centers: dict[str, tuple[float, float]] = {}
+    for k, v in payload.corners.items():
+        if k not in ("tl", "tr", "br", "bl"):
+            continue
+        if not isinstance(v, list) or len(v) != 2:
+            continue
+        centers[k] = (float(v[0]), float(v[1]))
+    result = calibration_mod.calibrate_extrinsic(db, camera_id, centers)
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    return result
 
 
 # ---------- zones ----------
@@ -870,15 +1092,25 @@ def _record_tracking_samples(
     db = SessionLocal()
     try:
         ts = datetime.utcnow()
-        rows = [
-            TrackingSample(
-                session_id=session_id, t=ts,
-                marker_aruco_id=d["aruco_id"],
-                x_norm=float(d["center_norm"][0]),
-                y_norm=float(d["center_norm"][1]),
+        rows: list[TrackingSample] = []
+        for d in detections_payload:
+            p = d.get("pose")  # ADR 0048 — present iff intrinsic + extrinsic done
+            xyz = (p or {}).get("world_xyz_m")
+            rows.append(
+                TrackingSample(
+                    session_id=session_id, t=ts,
+                    marker_aruco_id=d["aruco_id"],
+                    x_norm=float(d["center_norm"][0]),
+                    y_norm=float(d["center_norm"][1]),
+                    world_x_m=float(xyz[0]) if xyz else None,
+                    world_y_m=float(xyz[1]) if xyz else None,
+                    world_z_m=float(xyz[2]) if xyz else None,
+                    yaw_deg=  float(p["yaw_deg"])   if p else None,
+                    pitch_deg=float(p["pitch_deg"]) if p else None,
+                    roll_deg= float(p["roll_deg"])  if p else None,
+                    reproj_error_px=float(p["reproj_error_px"]) if p else None,
+                )
             )
-            for d in detections_payload
-        ]
         db.bulk_save_objects(rows)
         db.commit()
     finally:
@@ -914,6 +1146,7 @@ async def ws_detect(ws: WebSocket):
     cached_zones: list[dict] = []
     cached_active: Optional[dict] = None
     cached_tracking: Optional[dict] = None
+    cached_camera: Optional[dict] = None  # ADR 0048 — intrinsic/extrinsic + marker meta
 
     try:
         while True:
@@ -924,6 +1157,7 @@ async def ws_detect(ws: WebSocket):
                 active_formation = cached_active.get("formation") if cached_active else None
                 cached_zones = _load_zones_dict(formation=active_formation)
                 cached_tracking = _load_active_tracking()
+                cached_camera = _load_active_camera()
                 last_state_reload = now
 
             arr = np.frombuffer(data, dtype=np.uint8)
@@ -943,25 +1177,86 @@ async def ws_detect(ws: WebSocket):
             zone_counts: dict[int, int] = {z["id"]: 0 for z in cached_zones}
             zone_label_lookup = {z["id"]: z["label"] for z in cached_zones}
 
-            person_map = _person_map_for(set(d.aruco_id for d in results))
+            marker_meta = _marker_meta_for(set(d.aruco_id for d in results))
+
+            # ADR 0048 — pose estimation when intrinsics are calibrated.
+            poses: dict[int, detection.PoseDetection] = {}
+            if cached_camera and cached_camera.get("K") is not None:
+                poses = detection.estimate_pose(
+                    results,
+                    np.array(cached_camera["K"], dtype=np.float64),
+                    np.array(cached_camera["dist"], dtype=np.float64),
+                    cached_camera["marker_size_m"],
+                )
+
+            # ADR 0050 — single-camera scene reconstruction.
+            scene_payload: Optional[dict] = None
+            extrinsic: Optional[pose_mod.Extrinsic] = None
+            if cached_camera and cached_camera.get("R") is not None and poses:
+                extrinsic = pose_mod.Extrinsic(
+                    R=np.array(cached_camera["R"], dtype=np.float64),
+                    t=np.array(cached_camera["t"], dtype=np.float64),
+                )
+                marker_obs = scene_mod.build_marker_observations(
+                    results, poses, extrinsic, marker_meta
+                )
+                people = scene_mod.fuse_person_observations(marker_obs)
+                scene_payload = {
+                    "world_frame": {
+                        "floor_w_m": cached_camera["floor_w_m"],
+                        "floor_h_m": cached_camera["floor_h_m"],
+                        "camera_position_world_m": cached_camera.get("camera_pos_world"),
+                    },
+                    "markers": [scene_mod.serialize_marker(m) for m in marker_obs],
+                    "people":  [scene_mod.serialize_person(p) for p in people],
+                    "coverage_pct": (
+                        round(100.0 * len(poses) / max(1, len(results)), 1)
+                    ),
+                }
 
             detections_payload = []
+            corner_centers_px: dict[str, list[float]] = {}
+            corner_ids = (cached_camera or {}).get("corner_ids") or {}
+            corner_lookup = {int(v): k for k, v in corner_ids.items()}
             for d in results:
                 cx, cy = d.center
                 center_norm = (cx / w, cy / h)
                 zid = detection.assign_zone(center_norm, zones_norm)
                 if zid is not None:
                     zone_counts[zid] = zone_counts.get(zid, 0) + 1
-                detections_payload.append(
-                    {
-                        "aruco_id": d.aruco_id,
-                        "corners_norm": [[c[0] / w, c[1] / h] for c in d.corners],
-                        "center_norm": [center_norm[0], center_norm[1]],
-                        "zone_id": zid,
-                        "zone_label": zone_label_lookup.get(zid),
-                        "person_name": person_map.get(d.aruco_id),
+                # Surface the live pixel center of any of the four floor-corner
+                # markers so the UI can offer a one-click "calibrate extrinsic".
+                if d.aruco_id in corner_lookup:
+                    corner_centers_px[corner_lookup[d.aruco_id]] = [float(cx), float(cy)]
+
+                entry = {
+                    "aruco_id": d.aruco_id,
+                    "corners_norm": [[c[0] / w, c[1] / h] for c in d.corners],
+                    "center_norm": [center_norm[0], center_norm[1]],
+                    "zone_id": zid,
+                    "zone_label": zone_label_lookup.get(zid),
+                    "person_name": marker_meta.get(d.aruco_id, {}).get("person_name"),
+                    "placement": marker_meta.get(d.aruco_id, {}).get("placement", "hat"),
+                }
+                p = poses.get(d.aruco_id)
+                if p is not None and extrinsic is not None:
+                    xyz_w, R_w = pose_mod.marker_pose_world(p.rvec, p.tvec, extrinsic)
+                    yaw, pitch, roll = pose_mod.R_to_euler_zyx_deg(R_w)
+                    entry["pose"] = {
+                        "world_xyz_m": [float(xyz_w[0]), float(xyz_w[1]), float(xyz_w[2])],
+                        "yaw_deg": round(yaw, 2),
+                        "pitch_deg": round(pitch, 2),
+                        "roll_deg": round(roll, 2),
+                        "reproj_error_px": round(p.reproj_error_px, 3),
                     }
-                )
+                elif p is not None:
+                    # Intrinsic-only: report camera-frame translation so the UI
+                    # can still show "z ≈ 1.2 m" depth without world frame.
+                    entry["pose_camera"] = {
+                        "tvec_camera_m": [float(p.tvec[0]), float(p.tvec[1]), float(p.tvec[2])],
+                        "reproj_error_px": round(p.reproj_error_px, 3),
+                    }
+                detections_payload.append(entry)
 
             # Tracking: drop a sample row per visible marker, throttled per session.
             if cached_tracking:
@@ -971,6 +1266,16 @@ async def ws_detect(ws: WebSocket):
                     detections_payload,
                     now,
                 )
+
+            calibration_hint: Optional[dict] = None
+            if cached_camera and corner_centers_px:
+                calibration_hint = {
+                    "camera_id": cached_camera["id"],
+                    "corners_visible_px": corner_centers_px,
+                    "all_four_visible": len(corner_centers_px) == 4,
+                    "floor_w_m": cached_camera["floor_w_m"],
+                    "floor_h_m": cached_camera["floor_h_m"],
+                }
 
             await ws.send_json(
                 {
@@ -982,6 +1287,13 @@ async def ws_detect(ws: WebSocket):
                     "zones": cached_zones,
                     "detections": detections_payload,
                     "zone_counts": zone_counts,
+                    "camera": {
+                        "id": cached_camera["id"],
+                        "intrinsic_calibrated": cached_camera.get("K") is not None,
+                        "extrinsic_calibrated": cached_camera.get("R") is not None,
+                    } if cached_camera else None,
+                    "scene_world": scene_payload,
+                    "calibration_hint": calibration_hint,
                 }
             )
     except WebSocketDisconnect:
@@ -1068,6 +1380,69 @@ def _person_map_for(aruco_ids: set[int]) -> dict[int, str]:
         db.close()
 
 
+def _marker_meta_for(aruco_ids: set[int]) -> dict[int, dict]:
+    """Bulk lookup of person_id / person_name / placement for a frame's markers."""
+    if not aruco_ids:
+        return {}
+    from .db import SessionLocal
+    db = SessionLocal()
+    try:
+        rows = (
+            db.execute(
+                select(Marker)
+                .options(joinedload(Marker.person))
+                .where(Marker.aruco_id.in_(aruco_ids))
+            )
+            .scalars()
+            .all()
+        )
+        return {
+            m.aruco_id: {
+                "person_id": m.person_id,
+                "person_name": m.person.name if m.person else None,
+                "placement": m.placement or "hat",
+            }
+            for m in rows
+        }
+    finally:
+        db.close()
+
+
+def _load_active_camera() -> Optional[dict]:
+    """The current single-camera deployment uses id=1.  Returns None if missing."""
+    from .db import SessionLocal
+    db = SessionLocal()
+    try:
+        c = db.get(Camera, 1)
+        if c is None:
+            return None
+        cam_pos: Optional[list[float]] = None
+        if c.has_extrinsic():
+            try:
+                ext = pose_mod.Extrinsic(
+                    R=np.array(c.R(), dtype=np.float64),
+                    t=np.array(c.t(), dtype=np.float64),
+                )
+                cam_pos = ext.camera_position_world().tolist()
+            except Exception:
+                cam_pos = None
+        return {
+            "id": c.id,
+            "name": c.name,
+            "marker_size_m": c.marker_size_m,
+            "K":    c.K(),
+            "dist": c.dist(),
+            "R":    c.R(),
+            "t":    c.t(),
+            "floor_w_m": c.floor_rect_w_m,
+            "floor_h_m": c.floor_rect_h_m,
+            "corner_ids": c.corner_ids() or {},
+            "camera_pos_world": cam_pos,
+        }
+    finally:
+        db.close()
+
+
 # ---------- frontend ----------
 
 app.mount("/static", StaticFiles(directory=str(FRONTEND / "static")), name="static")
@@ -1086,6 +1461,12 @@ def admin():
 @app.get("/track")
 def track_page():
     return FileResponse(str(FRONTEND / "track.html"))
+
+
+@app.get("/track3d")
+def track3d_page():
+    """ADR 0050 — 3D world-frame viewer of the live scene."""
+    return FileResponse(str(FRONTEND / "track3d.html"))
 
 
 @app.get("/m/{aruco_id}")

@@ -13,6 +13,7 @@
     <a href="/">Live</a>
     <a href="/admin" class="active">Admin</a>
     <a href="/track">Track</a>
+    <a href="/track3d">Track 3D</a>
   </nav>
 </header>
 <main>
@@ -21,6 +22,7 @@
     <button data-tab="markers">Markers</button>
     <button data-tab="zones">Zones</button>
     <button data-tab="questions">Questions</button>
+    <button data-tab="cameras">Cameras</button>
   </div>
 
   <!-- PEOPLE -->
@@ -46,6 +48,15 @@
       <h3 style="margin-top:0;">Generate unassigned markers</h3>
       <div class="row">
         <label>Count: <input id="batch-count" type="number" min="1" max="100" value="10" style="width:80px;" /></label>
+        <label>Placement:
+          <select id="batch-placement" title="ADR 0049 — body placement for the marker(s)">
+            <option value="hat" selected>hat</option>
+            <option value="chest">chest</option>
+            <option value="back">back</option>
+            <option value="wrist">wrist</option>
+            <option value="accessory">accessory</option>
+          </select>
+        </label>
         <button id="batch-create-btn" class="primary">Create batch</button>
         <span class="spacer"></span>
         <span class="muted" id="dict-info"></span>
@@ -172,6 +183,115 @@
       <div id="question-detail-body"></div>
     </div>
   </section>
+
+  <!-- CAMERAS — ADR 0048 + 0012 -->
+  <section id="tab-cameras" hidden>
+    <div class="panel">
+      <h3 style="margin-top:0;">Camera calibration — ADR 0048 (pose) + 0012 (extrinsic)</h3>
+      <p class="muted" style="margin: 4px 0 12px;">
+        Two one-time steps unlock 3D pose: <strong>(1) intrinsic</strong> from a printed ChArUco board,
+        then <strong>(2) extrinsic</strong> from four marker cards taped to the floor at known corners.
+        After both, every detected marker reports world XYZ + yaw/pitch/roll, and
+        <a href="/track3d" target="_blank">/track3d</a> shows the scene in metres.
+      </p>
+      <div id="cameras-list"></div>
+    </div>
+
+    <!-- Intrinsic calibration -->
+    <div class="panel" id="intrinsic-panel" hidden>
+      <h3 style="margin-top:0;">Step 1 — Intrinsic calibration (ChArUco board)</h3>
+      <div class="row" style="margin-bottom: 10px;">
+        <a href="/api/calibration/charuco-board.png" target="_blank">
+          <button>Download ChArUco board PNG</button>
+        </a>
+        <span class="muted">Print on A4 (or larger) and keep flat — a foam-board mount works best.</span>
+      </div>
+      <div class="row">
+        <label>Camera: <select id="ic-device-select"></select></label>
+        <label>Resolution:
+          <select id="ic-resolution">
+            <option>640x480</option>
+            <option selected>1280x720</option>
+            <option>1920x1080</option>
+          </select>
+        </label>
+        <button id="ic-start-btn" class="primary">Start capture</button>
+        <button id="ic-finish-btn" disabled>Compute calibration</button>
+        <button id="ic-cancel-btn" disabled>Cancel</button>
+        <span class="spacer"></span>
+        <span id="ic-status" class="status-pill">idle</span>
+      </div>
+      <div class="row" style="margin-top: 10px;">
+        <div style="position:relative; width: 480px;">
+          <video id="ic-video" autoplay playsinline muted style="width:100%; border-radius:6px; background:#000;"></video>
+        </div>
+        <div style="flex:1;">
+          <div id="ic-views-bar" style="height: 14px; background:#1a2440; border-radius:7px; overflow:hidden; margin-bottom:8px;">
+            <div id="ic-views-fill" style="height:100%; width:0%; background: var(--accent); transition: width 0.2s;"></div>
+          </div>
+          <div id="ic-views-label" class="muted" style="font-size:13px;">No session.</div>
+          <div id="ic-message" class="muted" style="font-size:12px; margin-top:8px;"></div>
+          <div id="ic-result" style="font-size:13px; margin-top:8px;"></div>
+        </div>
+      </div>
+      <div class="muted" style="margin-top: 10px; font-size:12px;">
+        Tip: vary the board's distance and tilt between captures. The session needs ≥ 20 distinct views;
+        identical or near-identical poses are silently skipped.
+      </div>
+    </div>
+
+    <!-- Extrinsic calibration -->
+    <div class="panel" id="extrinsic-panel" hidden>
+      <h3 style="margin-top:0;">Step 2 — Extrinsic from four floor-corner markers</h3>
+      <div class="row">
+        <label>Floor rectangle width: <input id="ex-floor-w" type="number" min="0.5" max="20" step="0.1" value="5" style="width:80px;" /> m</label>
+        <label>height: <input id="ex-floor-h" type="number" min="0.5" max="20" step="0.1" value="4" style="width:80px;" /> m</label>
+        <label>marker side: <input id="ex-marker-size" type="number" min="0.01" max="1" step="0.005" value="0.15" style="width:80px;" /> m</label>
+        <button id="ex-save-settings">Save settings</button>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <div>
+          <div class="muted" style="font-size:12px;">Reserved corner ids (top of dictionary)</div>
+          <div id="ex-corner-ids" style="font-family: ui-monospace, SF Mono, monospace; font-size: 14px;"></div>
+        </div>
+        <span class="spacer"></span>
+        <a href="/api/markers/pdf?ids=" target="_blank" id="ex-print-corners">
+          <button>Open print sheet for corner markers</button>
+        </a>
+      </div>
+      <div class="muted" style="margin-top: 6px; font-size:12px;">
+        Tape the four corner markers on the floor in a rectangle (TL, TR, BR, BL → matches the dimensions above).
+        Then start the live camera below; once all four are visible the system can solve the world frame.
+      </div>
+
+      <div class="row" style="margin-top: 14px;">
+        <label>Camera: <select id="ex-device-select"></select></label>
+        <label>Resolution:
+          <select id="ex-resolution">
+            <option>640x480</option>
+            <option selected>1280x720</option>
+            <option>1920x1080</option>
+          </select>
+        </label>
+        <button id="ex-start-cam" class="primary">Start camera</button>
+        <button id="ex-stop-cam" disabled>Stop camera</button>
+        <button id="ex-solve" class="primary" disabled>Solve extrinsic</button>
+        <span class="spacer"></span>
+        <span id="ex-status" class="status-pill">idle</span>
+      </div>
+      <div class="row" style="margin-top: 10px;">
+        <div style="position:relative; width: 640px;">
+          <video id="ex-video" autoplay playsinline muted style="width:100%; border-radius:6px; background:#000;"></video>
+          <canvas id="ex-overlay" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;"></canvas>
+        </div>
+        <div style="flex:1;">
+          <div id="ex-corners-status" style="font-size:13px;"></div>
+          <div id="ex-result" style="font-size:13px; margin-top:8px;"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
 </main>
 <script type="module" src="/static/admin/main.js"></script>
 </body>
