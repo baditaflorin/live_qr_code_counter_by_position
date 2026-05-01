@@ -88,6 +88,15 @@
 
   <div class="t3d-grid">
     <div>
+      <div class="panel" style="margin-bottom:8px; padding:8px 12px;">
+        <div class="row" style="font-size:13px;">
+          <label><input type="checkbox" id="opt-trails" checked /> Trails</label>
+          <label><input type="checkbox" id="opt-heatmap" /> Heatmap</label>
+          <button id="opt-clear-history" title="Reset trails + heatmap dwell-time accumulator">Clear history</button>
+          <span class="spacer"></span>
+          <span class="muted" style="font-size:12px;" id="opt-status">accumulating…</span>
+        </div>
+      </div>
       <div id="t3d-canvas-wrap">
         <div id="t3d-overlay">drag = orbit · scroll = zoom · right-drag = pan</div>
       </div>
@@ -113,6 +122,10 @@
       <div class="panel">
         <h3 style="margin-top:0;">People in view</h3>
         <div id="t3d-people-list" class="muted">Nothing detected.</div>
+      </div>
+      <div class="panel">
+        <h3 style="margin-top:0;">Live encounters</h3>
+        <div id="t3d-encounters-list" class="muted">No-one is close to anyone yet.</div>
       </div>
       <div class="panel">
         <h3 style="margin-top:0;">Legend</h3>

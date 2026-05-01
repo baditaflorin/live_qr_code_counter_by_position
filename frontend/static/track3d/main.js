@@ -19,11 +19,16 @@ import { api } from "/static/common.js";
 
 // ---------- DOM refs ------------------------------------------------------
 
-const wrap        = document.getElementById("t3d-canvas-wrap");
-const banner      = document.getElementById("t3d-banner");
-const peopleList  = document.getElementById("t3d-people-list");
-const camerasList = document.getElementById("t3d-cameras-list");
-const statusEl    = document.getElementById("t3d-status");
+const wrap          = document.getElementById("t3d-canvas-wrap");
+const banner        = document.getElementById("t3d-banner");
+const peopleList    = document.getElementById("t3d-people-list");
+const camerasList   = document.getElementById("t3d-cameras-list");
+const encountersList = document.getElementById("t3d-encounters-list");
+const statusEl      = document.getElementById("t3d-status");
+const optTrails     = document.getElementById("opt-trails");
+const optHeatmap    = document.getElementById("opt-heatmap");
+const optClear      = document.getElementById("opt-clear-history");
+const optStatus     = document.getElementById("opt-status");
 
 // ---------- Three.js scene -----------------------------------------------
 
@@ -56,6 +61,14 @@ const cameraMarkers = new Map();   // camera_id -> Group
 
 const markerMeshes = new Map();    // aruco_id -> Group
 const personMeshes = new Map();    // person_id -> Group
+const personTrails = new Map();    // person_id -> { line, positions[], colors }
+const TRAIL_MAX_POINTS = 300;      // ~30 s at 10 Hz; past that, drop oldest
+
+// Heatmap accumulator: 20 cm grid cells, dwell time per cell.
+const HEAT_CELL_M = 0.2;
+const heatGrid = new Map();        // "x,y" -> seconds dwelt
+let heatLastUpdateTs = 0;
+let heatMesh = null;
 
 function ensureFloor(w, h) {
   if (floorMesh && floorMesh.userData.w === w && floorMesh.userData.h === h) return;
@@ -213,6 +226,121 @@ function pruneCameraMarkers(activeIds) {
   }
 }
 
+// ---------- trails -------------------------------------------------------
+
+function ensureTrail(personId) {
+  let t = personTrails.get(personId);
+  if (t) return t;
+  const positions = new Float32Array(TRAIL_MAX_POINTS * 3);
+  const colors    = new Float32Array(TRAIL_MAX_POINTS * 3);
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute("color",    new THREE.BufferAttribute(colors, 3));
+  geom.setDrawRange(0, 0);
+  const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true });
+  const line = new THREE.Line(geom, mat);
+  scene.add(line);
+  t = { line, positions, colors, count: 0 };
+  personTrails.set(personId, t);
+  return t;
+}
+
+function pushTrailPoint(personId, x, y) {
+  const t = ensureTrail(personId);
+  // Shift existing points back by one slot, drop the oldest.
+  if (t.count >= TRAIL_MAX_POINTS) {
+    t.positions.copyWithin(0, 3);
+    t.colors.copyWithin(0, 3);
+    t.count = TRAIL_MAX_POINTS - 1;
+  }
+  const i = t.count;
+  t.positions[i * 3 + 0] = x;
+  t.positions[i * 3 + 1] = y;
+  t.positions[i * 3 + 2] = 0.02;
+  t.count++;
+  // Repaint colors: oldest = transparent blue, newest = bright cyan.
+  for (let k = 0; k < t.count; k++) {
+    const a = (k + 1) / t.count;
+    t.colors[k * 3 + 0] = 0.4 * a;
+    t.colors[k * 3 + 1] = 0.9 * a;
+    t.colors[k * 3 + 2] = 1.0 * a;
+  }
+  t.line.geometry.attributes.position.needsUpdate = true;
+  t.line.geometry.attributes.color.needsUpdate = true;
+  t.line.geometry.setDrawRange(0, t.count);
+  t.line.visible = optTrails.checked;
+}
+
+function pruneTrail(personId) {
+  const t = personTrails.get(personId);
+  if (!t) return;
+  scene.remove(t.line);
+  t.line.geometry.dispose();
+  t.line.material.dispose();
+  personTrails.delete(personId);
+}
+
+function clearAllTrails() {
+  for (const id of [...personTrails.keys()]) pruneTrail(id);
+}
+
+// ---------- heatmap ------------------------------------------------------
+
+function bumpHeat(x, y, dt_s) {
+  const gx = Math.round(x / HEAT_CELL_M);
+  const gy = Math.round(y / HEAT_CELL_M);
+  const key = gx + "," + gy;
+  heatGrid.set(key, (heatGrid.get(key) || 0) + dt_s);
+}
+
+function rebuildHeatMesh() {
+  if (heatMesh) {
+    scene.remove(heatMesh);
+    heatMesh.geometry.dispose();
+    heatMesh.material.dispose();
+    heatMesh = null;
+  }
+  if (heatGrid.size === 0) return;
+  const max = Math.max(...heatGrid.values());
+  if (max <= 0) return;
+  const dummy = new THREE.Object3D();
+  const geom = new THREE.PlaneGeometry(HEAT_CELL_M * 0.95, HEAT_CELL_M * 0.95);
+  const mat = new THREE.MeshBasicMaterial({
+    transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const inst = new THREE.InstancedMesh(geom, mat, heatGrid.size);
+  inst.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(heatGrid.size * 3), 3);
+  let i = 0;
+  for (const [key, dwell] of heatGrid.entries()) {
+    const [gx, gy] = key.split(",").map(Number);
+    dummy.position.set(gx * HEAT_CELL_M, gy * HEAT_CELL_M, 0.001);
+    dummy.updateMatrix();
+    inst.setMatrixAt(i, dummy.matrix);
+    const intensity = Math.min(1, dwell / max);
+    // Cool→warm gradient: blue (cool) → yellow (medium) → red (hot)
+    const r = intensity;
+    const g = intensity < 0.5 ? intensity * 2 : (1 - intensity) * 2;
+    const b = 1 - intensity;
+    inst.instanceColor.setXYZ(i, r, g, b);
+    i++;
+  }
+  inst.instanceMatrix.needsUpdate = true;
+  inst.instanceColor.needsUpdate = true;
+  inst.visible = optHeatmap.checked;
+  scene.add(inst);
+  heatMesh = inst;
+}
+
+function clearHeat() {
+  heatGrid.clear();
+  if (heatMesh) {
+    scene.remove(heatMesh);
+    heatMesh.geometry.dispose();
+    heatMesh.material.dispose();
+    heatMesh = null;
+  }
+}
+
 // ---------- update from a fused scene_world payload ---------------------
 
 const ageMs = 1500;
@@ -271,6 +399,11 @@ function updateScene(world) {
     lastSeen.set("m:" + m.aruco_id, now);
   }
 
+  // Heatmap accumulator: time since last update (for dwell weighting).
+  const wallNow = world.ts || (Date.now() / 1000);
+  const dt_s = heatLastUpdateTs > 0 ? Math.min(0.5, wallNow - heatLastUpdateTs) : 0;
+  heatLastUpdateTs = wallNow;
+
   for (const p of world.people || []) {
     if (p.person_id == null) continue;
     const key = `p:${p.person_id}`;
@@ -286,7 +419,17 @@ function updateScene(world) {
     const label = p.person_name || `#${p.marker_ids.join("+")}`;
     updateSpriteText(mesh.userData.sprite, label);
     lastSeen.set(key, now);
+
+    pushTrailPoint(p.person_id, x, y);
+    if (dt_s > 0) bumpHeat(x, y, dt_s);
   }
+
+  // Heatmap mesh is expensive to rebuild — refresh at 1 Hz max.
+  if (optHeatmap.checked && (!heatMesh || performance.now() - (heatMesh.userData?.builtAt || 0) > 1000)) {
+    rebuildHeatMesh();
+    if (heatMesh) heatMesh.userData.builtAt = performance.now();
+  }
+  if (heatMesh) heatMesh.visible = optHeatmap.checked;
 
   for (const [id, mesh] of markerMeshes) {
     if (now - (lastSeen.get("m:" + id) || 0) > ageMs) {
@@ -297,11 +440,42 @@ function updateScene(world) {
   for (const [key, mesh] of personMeshes) {
     if (now - (lastSeen.get(key) || 0) > ageMs) {
       scene.remove(mesh); personMeshes.delete(key);
+      const pid = parseInt(key.slice(2), 10);
+      pruneTrail(pid);
     }
   }
 
   renderPeopleList(world.people || []);
   renderCamerasList(world.cameras || []);
+  renderEncounters(world.encounters);
+  if (optStatus) {
+    optStatus.textContent =
+      `${heatGrid.size} cells · ${[...personTrails.values()].reduce((a, t) => a + t.count, 0)} trail pts`;
+  }
+}
+
+function renderEncounters(enc) {
+  if (!enc || (!enc.live?.length)) {
+    encountersList.textContent = "No-one is close to anyone yet.";
+    encountersList.className = "muted";
+    return;
+  }
+  encountersList.className = "";
+  encountersList.innerHTML = "";
+  for (const e of enc.live) {
+    const card = document.createElement("div");
+    card.className = "person-card";
+    const aName = e.a_name || `#${e.a_id}`;
+    const bName = e.b_name || `#${e.b_id}`;
+    const m = Math.floor(e.duration_s / 60);
+    const s = Math.floor(e.duration_s % 60);
+    const dur = m > 0 ? `${m}m${String(s).padStart(2, "0")}s` : `${s}s`;
+    card.innerHTML = `
+      <div class="nm">${aName} ↔ ${bName}</div>
+      <div class="muted">together for ${dur}</div>
+    `;
+    encountersList.appendChild(card);
+  }
 }
 
 function renderPeopleList(people) {
@@ -434,3 +608,15 @@ animate();
 refreshCalibrationBanner();
 setInterval(refreshCalibrationBanner, 5000);
 openSceneWS();
+
+optTrails.addEventListener("change", () => {
+  for (const t of personTrails.values()) t.line.visible = optTrails.checked;
+});
+optHeatmap.addEventListener("change", () => {
+  if (heatMesh) heatMesh.visible = optHeatmap.checked;
+  if (optHeatmap.checked && !heatMesh) rebuildHeatMesh();
+});
+optClear.addEventListener("click", () => {
+  clearAllTrails();
+  clearHeat();
+});
