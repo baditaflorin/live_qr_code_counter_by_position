@@ -88,6 +88,25 @@
 
   <div class="t3d-grid">
     <div>
+      <div class="panel" style="margin-bottom:8px; padding:8px 12px;">
+        <div class="row" style="font-size:13px; flex-wrap: wrap;">
+          <label><input type="checkbox" id="opt-trails" checked /> Trails</label>
+          <label><input type="checkbox" id="opt-heatmap" /> Heatmap</label>
+          <button id="opt-clear-history" title="Reset trails + heatmap dwell-time accumulator">Clear history</button>
+          <span style="border-left: 1px solid #2a3656; padding-left: 8px; margin-left: 4px;"></span>
+          <button id="view-frame" title="Fit camera to all visible markers">⊡ Frame all</button>
+          <button id="view-top" title="Top-down orthographic-ish view">↓ Top-down</button>
+          <button id="view-reset" title="Default orbit angle">↺ Reset</button>
+          <label title="Continuously track this person.">
+            Follow:
+            <select id="view-follow" style="max-width:160px;">
+              <option value="">— none —</option>
+            </select>
+          </label>
+          <span class="spacer"></span>
+          <span class="muted" style="font-size:12px;" id="opt-status">accumulating…</span>
+        </div>
+      </div>
       <div id="t3d-canvas-wrap">
         <div id="t3d-overlay">drag = orbit · scroll = zoom · right-drag = pan</div>
       </div>
@@ -113,6 +132,20 @@
       <div class="panel">
         <h3 style="margin-top:0;">People in view</h3>
         <div id="t3d-people-list" class="muted">Nothing detected.</div>
+      </div>
+      <div class="panel">
+        <h3 style="margin-top:0;">Live encounters</h3>
+        <div id="t3d-encounters-list" class="muted">No-one is close to anyone yet.</div>
+      </div>
+      <div class="panel">
+        <h3 style="margin-top:0;">Recordings</h3>
+        <div class="row" style="margin-bottom:8px;">
+          <input id="rec-name" type="text" placeholder="Recording name" style="flex:1;" />
+          <button id="rec-start" class="primary">Record</button>
+          <button id="rec-stop" disabled>Stop</button>
+        </div>
+        <div id="rec-status" class="muted" style="font-size:12px; margin-bottom:8px;"></div>
+        <div id="rec-list" class="muted" style="font-size:12px;">No recordings yet.</div>
       </div>
       <div class="panel">
         <h3 style="margin-top:0;">Legend</h3>

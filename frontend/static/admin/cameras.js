@@ -69,6 +69,37 @@ function renderList() {
         + `reproj err ${c.extrinsic_reproj_error_px?.toFixed(3)} px`));
     }
 
+    // RTSP / IP-camera ingest row.
+    const rtspRow = el("div", { class: "row", style: { marginTop: "8px", fontSize: "13px" } });
+    const rtspInput = el("input", {
+      type: "text",
+      value: c.rtsp_url || "",
+      placeholder: "rtsp://user:pass@host/stream",
+      style: { flex: "1", minWidth: "320px" },
+    });
+    const rtspChk = el("input", {
+      type: "checkbox",
+      checked: c.rtsp_enabled,
+      title: "Spawn server-side ingest worker",
+    });
+    const rtspLabel = el("label", { style: { fontSize: "12px" } }, rtspChk, " enable");
+    const rtspSave = el("button", {
+      onclick: async () => {
+        try {
+          await api(`/api/cameras/${c.id}`, {
+            method: "PUT",
+            body: { rtsp_url: rtspInput.value || null, rtsp_enabled: rtspChk.checked },
+          });
+          await loadCameras();
+        } catch (e) { alert("Save failed: " + e.message); }
+      },
+    }, "Save RTSP");
+    rtspRow.appendChild(el("span", { style: { fontWeight: "600", minWidth: "50px" } }, "RTSP:"));
+    rtspRow.appendChild(rtspInput);
+    rtspRow.appendChild(rtspLabel);
+    rtspRow.appendChild(rtspSave);
+    row.appendChild(rtspRow);
+
     const actions = el("div", { class: "row", style: { marginTop: "8px" } });
     actions.appendChild(el("button", {
       onclick: () => { activeCameraId = c.id; loadCameras(); },
@@ -92,6 +123,17 @@ function renderList() {
           await loadCameras();
         },
       }, "Clear extrinsic"));
+    }
+    if (c.id !== 1) {
+      actions.appendChild(el("button", {
+        class: "danger",
+        onclick: async () => {
+          if (!confirm(`Delete camera ${c.id} (${c.name})? Calibration is lost.`)) return;
+          await api(`/api/cameras/${c.id}`, { method: "DELETE" });
+          if (activeCameraId === c.id) activeCameraId = 1;
+          await loadCameras();
+        },
+      }, "Delete camera"));
     }
     row.appendChild(actions);
     root.appendChild(row);
@@ -265,8 +307,10 @@ function syncExtrinsicForm(cam) {
   const ids = cam.corner_ids || {};
   document.getElementById("ex-corner-ids").textContent =
     `TL=${ids.tl}  TR=${ids.tr}  BR=${ids.br}  BL=${ids.bl}`;
-  const a = document.getElementById("ex-print-corners");
-  a.href = `/api/markers/pdf?ids=${ids.tl},${ids.tr},${ids.br},${ids.bl}`;
+  // Print-sheet href is the static /api/calibration/corner-markers-pdf endpoint
+  // (set in admin.html). It renders the four reserved corner ids directly from
+  // the active camera, which the markers/pdf endpoint can't do because corner
+  // ids aren't person-marker rows.
 }
 
 async function saveExtrinsicSettings() {
@@ -409,6 +453,23 @@ export function initCameras() {
   document.getElementById("ex-start-cam").addEventListener("click", () => startExtrinsicCamera());
   document.getElementById("ex-stop-cam").addEventListener("click", () => stopExtrinsicCamera());
   document.getElementById("ex-solve").addEventListener("click", () => solveExtrinsic());
+
+  const addBtn = document.getElementById("add-camera-btn");
+  if (addBtn) addBtn.addEventListener("click", async () => {
+    const nameInput = document.getElementById("new-camera-name");
+    const name = (nameInput.value || "").trim();
+    try {
+      const created = await api("/api/cameras", {
+        method: "POST",
+        body: { name: name || null },
+      });
+      nameInput.value = "";
+      activeCameraId = created.id;
+      await loadCameras();
+    } catch (e) {
+      alert("Add camera failed: " + e.message);
+    }
+  });
 
   // Lazy-list video devices when the tab opens.
   const onTabSwitch = new MutationObserver(() => {

@@ -6,6 +6,7 @@ const overlay = document.getElementById("overlay");
 const startBtn = document.getElementById("start-btn");
 const stopBtn = document.getElementById("stop-btn");
 const cameraSelect = document.getElementById("camera-select");
+const publishCameraSelect = document.getElementById("publish-camera-select");
 const resolutionSel = document.getElementById("resolution");
 const fpsSel = document.getElementById("fps");
 const statusPill = document.getElementById("status");
@@ -145,9 +146,36 @@ function stop() {
   clearOverlay();
 }
 
+async function loadPublishCameras() {
+  if (!publishCameraSelect) return;
+  try {
+    const cams = await api("/api/cameras");
+    const prev = publishCameraSelect.value || localStorage.getItem("publishCameraId") || "1";
+    publishCameraSelect.innerHTML = "";
+    for (const c of cams) {
+      const opt = document.createElement("option");
+      opt.value = String(c.id);
+      const tags = [];
+      if (!c.intrinsic_calibrated) tags.push("no intrinsic");
+      if (!c.extrinsic_calibrated) tags.push("no extrinsic");
+      opt.textContent = `cam ${c.id} — ${c.name}${tags.length ? " (" + tags.join(", ") + ")" : ""}`;
+      publishCameraSelect.appendChild(opt);
+    }
+    if ([...publishCameraSelect.options].some((o) => o.value === prev)) {
+      publishCameraSelect.value = prev;
+    }
+    publishCameraSelect.addEventListener("change", () => {
+      localStorage.setItem("publishCameraId", publishCameraSelect.value);
+    }, { once: true });
+  } catch (e) {
+    console.warn("loadPublishCameras failed:", e);
+  }
+}
+
 function openWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws/detect`);
+  const camId = publishCameraSelect ? publishCameraSelect.value : "1";
+  ws = new WebSocket(`${proto}://${location.host}/ws/detect?camera_id=${encodeURIComponent(camId || "1")}`);
   ws.binaryType = "arraybuffer";
   ws.onopen = () => setStatus("live", "ok");
   ws.onclose = () => setStatus("disconnected", "err");
@@ -478,5 +506,6 @@ stopBtn.addEventListener("click", stop);
 
 // boot
 loadCameras();
+loadPublishCameras();
 loadZones();
 loadQuestions();

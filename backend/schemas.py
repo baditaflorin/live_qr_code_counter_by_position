@@ -152,6 +152,8 @@ class CameraOut(BaseModel):
     R_world_to_camera: Optional[list[list[float]]] = None
     t_world_to_camera: Optional[list[float]] = None
     camera_position_world_m: Optional[list[float]] = None
+    rtsp_url: Optional[str] = None
+    rtsp_enabled: bool = False
     created_at: datetime
 
 
@@ -162,6 +164,8 @@ class CameraSettingsIn(BaseModel):
     floor_rect_w_m: Optional[float] = Field(default=None, gt=0.1, le=50.0)
     floor_rect_h_m: Optional[float] = Field(default=None, gt=0.1, le=50.0)
     corner_ids: Optional[dict[str, int]] = None  # keys: tl/tr/br/bl
+    rtsp_url: Optional[str] = None
+    rtsp_enabled: Optional[bool] = None
 
 
 class CalibrationStatus(BaseModel):

@@ -142,9 +142,14 @@ class SceneAggregator:
             if primary_frame is None and live:
                 primary_frame = live[0].world_frame
 
-            # Camera summary list for the observer panel.
-            cameras_summary = [
-                {
+            # Camera summary list for the observer panel — includes the mean
+            # reprojection error this camera is currently reporting (a live
+            # signal of intrinsic-calibration health and focus).
+            cameras_summary = []
+            for s in live:
+                errs = [m.reproj_error_px for m in s.markers.values()]
+                mean_err = float(sum(errs) / len(errs)) if errs else None
+                cameras_summary.append({
                     "camera_id": s.camera_id,
                     "name": s.camera_name,
                     "fps": round(s.fps, 1),
@@ -153,10 +158,9 @@ class SceneAggregator:
                     "intrinsic_calibrated": s.intrinsic_calibrated,
                     "extrinsic_calibrated": s.extrinsic_calibrated,
                     "coverage_pct": s.coverage_pct,
+                    "mean_reproj_error_px": round(mean_err, 3) if mean_err is not None else None,
                     "camera_position_world_m": s.world_frame.get("camera_position_world_m"),
-                }
-                for s in live
-            ]
+                })
 
             # Group observations by marker id across cameras.
             per_marker: dict[int, list[tuple[int, MarkerObservation]]] = {}
@@ -168,6 +172,7 @@ class SceneAggregator:
 
             fused_markers: list[MarkerObservation] = []
             marker_witnesses: dict[int, list[int]] = {}
+            marker_disagreement_cm: dict[int, Optional[float]] = {}
             for aruco_id, observations in per_marker.items():
                 obs_list = [o for _, o in observations]
                 cam_ids = [cid for cid, _ in observations]
@@ -178,6 +183,17 @@ class SceneAggregator:
 
                 positions = np.array([o.world_xyz for o in obs_list])
                 fused_xyz = (positions.T * weights).sum(axis=1) / wsum
+
+                # Cross-camera agreement: max pairwise distance (cm) between
+                # any two cameras' world-frame estimates of this marker.
+                # Tight (<5 cm) = extrinsic is solid; loose (>20 cm) = at
+                # least one camera's calibration drifted or was wrong.
+                if len(positions) > 1:
+                    diffs = positions[:, None, :] - positions[None, :, :]
+                    dists_m = np.linalg.norm(diffs, axis=2)
+                    marker_disagreement_cm[aruco_id] = float(dists_m.max() * 100.0)
+                else:
+                    marker_disagreement_cm[aruco_id] = None
 
                 quats = []
                 for o in obs_list:
@@ -213,7 +229,15 @@ class SceneAggregator:
                     "camera_position_world_m": None,
                 },
                 "markers": [
-                    {**scene_mod.serialize_marker(m), "witness_camera_ids": marker_witnesses.get(m.aruco_id, [])}
+                    {
+                        **scene_mod.serialize_marker(m),
+                        "witness_camera_ids": marker_witnesses.get(m.aruco_id, []),
+                        "disagreement_cm": (
+                            round(marker_disagreement_cm.get(m.aruco_id), 2)
+                            if marker_disagreement_cm.get(m.aruco_id) is not None
+                            else None
+                        ),
+                    }
                     for m in fused_markers
                 ],
                 "people": [scene_mod.serialize_person(p) for p in people],
