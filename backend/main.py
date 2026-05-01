@@ -905,6 +905,67 @@ def _load_active_tracking() -> Optional[dict]:
         db.close()
 
 
+# ---------- broadcast to /present and other passive viewers ----------
+#
+# /ws/detect is per-client: each browser sending frames gets its own results
+# back. /present (and similar audience-facing pages) need the latest detection
+# state without owning a camera. The WS handler pushes each result to a list
+# of observers; subscribers connect via /ws/observe and just receive.
+
+_observers: list["WebSocket"] = []
+
+
+async def _broadcast_to_observers(payload: dict) -> None:
+    """Best-effort broadcast — drop dead sockets silently."""
+    if not _observers:
+        return
+    dead: list[WebSocket] = []
+    for ws in _observers:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        try:
+            _observers.remove(ws)
+        except ValueError:
+            pass
+
+
+@app.websocket("/ws/observe")
+async def ws_observe(ws: WebSocket):
+    """Read-only stream of the latest detection state. Sends an immediate
+    'hello' with the current active question + zones so the page renders
+    something even if no camera is running yet."""
+    await ws.accept()
+    _observers.append(ws)
+    try:
+        # Immediate hello so /present can render before the next live frame.
+        active = _load_active_question()
+        formation = active.get("formation") if active else None
+        zones = _load_zones_dict(formation=formation)
+        await ws.send_json({
+            "ok": True,
+            "kind": "hello",
+            "active_question": active,
+            "zones": zones,
+            "zone_counts": {z["id"]: 0 for z in zones},
+            "detections": [],
+        })
+        while True:
+            # Keep the connection alive; observer doesn't send anything meaningful.
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        try:
+            _observers.remove(ws)
+        except ValueError:
+            pass
+
+
 # ---------- live detection websocket ----------
 
 @app.websocket("/ws/detect")
@@ -972,18 +1033,19 @@ async def ws_detect(ws: WebSocket):
                     now,
                 )
 
-            await ws.send_json(
-                {
-                    "ok": True,
-                    "frame_w": w,
-                    "frame_h": h,
-                    "active_question": cached_active,
-                    "active_tracking": cached_tracking,
-                    "zones": cached_zones,
-                    "detections": detections_payload,
-                    "zone_counts": zone_counts,
-                }
-            )
+            payload = {
+                "ok": True,
+                "frame_w": w,
+                "frame_h": h,
+                "active_question": cached_active,
+                "active_tracking": cached_tracking,
+                "zones": cached_zones,
+                "detections": detections_payload,
+                "zone_counts": zone_counts,
+            }
+            await ws.send_json(payload)
+            # Mirror to /present and any other observers.
+            await _broadcast_to_observers(payload)
     except WebSocketDisconnect:
         return
     except Exception as e:  # noqa: BLE001
@@ -1086,6 +1148,11 @@ def admin():
 @app.get("/track")
 def track_page():
     return FileResponse(str(FRONTEND / "track.html"))
+
+
+@app.get("/present")
+def present_page():
+    return FileResponse(str(FRONTEND / "present.html"))
 
 
 @app.get("/m/{aruco_id}")
