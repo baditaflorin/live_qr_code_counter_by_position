@@ -1,27 +1,29 @@
-// /track3d — live 3D world-frame view of the scene_world payload (ADR 0050).
+// /track3d — observer for the multi-camera fused world scene.
 //
 // Pipeline:
 //
-//   webcam ── JPEG ──▶ WS /ws/detect ──▶ scene_world ──▶ Three.js scene
+//   capture clients ── frames ──▶ /ws/detect ──▶ scene_state aggregator
+//                                                       │
+//                            /ws/scene  ◀── 10 Hz ──────┘
+//                                ▼
+//                          Three.js scene
 //
-// The backend lifts each detected marker into world coordinates using the
-// camera's intrinsic (ADR 0048) + extrinsic (ADR 0012); we just render
-// what comes back. If the camera isn't fully calibrated, scene_world is
-// null and we display a friendly banner pointing to /admin to finish setup.
+// This page no longer owns a camera — capture happens on the Live page (or
+// any other /ws/detect publisher).  /track3d just subscribes to the fused
+// world state at 10 Hz and renders it.  Multiple cameras observing the same
+// floor are quality-weighted and combined per-marker before reaching us.
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { CameraStream } from "/static/lib/camera.js";
 import { api } from "/static/common.js";
 
 // ---------- DOM refs ------------------------------------------------------
 
-const wrap   = document.getElementById("t3d-canvas-wrap");
-const banner = document.getElementById("t3d-banner");
-const peopleList = document.getElementById("t3d-people-list");
-const camStatus  = document.getElementById("cam-camera-status");
-const fpsEl  = document.getElementById("t3d-fps-actual");
-const statusEl = document.getElementById("t3d-status");
+const wrap        = document.getElementById("t3d-canvas-wrap");
+const banner      = document.getElementById("t3d-banner");
+const peopleList  = document.getElementById("t3d-people-list");
+const camerasList = document.getElementById("t3d-cameras-list");
+const statusEl    = document.getElementById("t3d-status");
 
 // ---------- Three.js scene -----------------------------------------------
 
@@ -46,17 +48,14 @@ const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
 dirLight.position.set(4, -6, 8);
 scene.add(dirLight);
 
-// World axis helper (X=red, Y=green, Z=blue) at origin (TL corner).
-const axes = new THREE.AxesHelper(0.6);
-scene.add(axes);
+scene.add(new THREE.AxesHelper(0.6));
 
-// Floor + grid get rebuilt whenever we learn the floor rectangle dimensions.
 let floorMesh = null;
 let floorGrid = null;
-let cameraMarker = null;
+const cameraMarkers = new Map();   // camera_id -> Group
 
-const markerMeshes = new Map();   // aruco_id -> Group
-const personMeshes = new Map();   // person_id -> Group
+const markerMeshes = new Map();    // aruco_id -> Group
+const personMeshes = new Map();    // person_id -> Group
 
 function ensureFloor(w, h) {
   if (floorMesh && floorMesh.userData.w === w && floorMesh.userData.h === h) return;
@@ -72,12 +71,9 @@ function ensureFloor(w, h) {
   floorMesh.userData = { w, h };
   scene.add(floorMesh);
 
-  // Rectangle outline in violet so the four-corner mapping is unambiguous.
   const lineGeom = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0, 0, 0),
-    new THREE.Vector3(w, 0, 0),
-    new THREE.Vector3(w, h, 0),
-    new THREE.Vector3(0, h, 0),
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(w, 0, 0),
+    new THREE.Vector3(w, h, 0), new THREE.Vector3(0, h, 0),
     new THREE.Vector3(0, 0, 0),
   ]);
   const lineMat = new THREE.LineBasicMaterial({ color: 0x7c3aed, linewidth: 2 });
@@ -85,7 +81,6 @@ function ensureFloor(w, h) {
   scene.add(floorGrid);
 
   controls.target.set(w / 2, h / 2, 0);
-  if (camera.position.length() < 1) camera.position.set(w + 1, -1, 4);
 }
 
 function reproErrorColor(err) {
@@ -95,7 +90,9 @@ function reproErrorColor(err) {
 }
 
 function makeMarkerMesh(initialColor) {
-  // A tiny flat square with a yaw arrow on top — readable from above.
+  // Tiny flat square + yaw arrow on the marker's local +X axis.  The whole
+  // group is rotated by the full ZYX euler from scene_world so pitch/roll
+  // show up too — useful when a marker is on a hat/wrist that tilts.
   const grp = new THREE.Group();
   const planeGeom = new THREE.PlaneGeometry(0.18, 0.18);
   const planeMat = new THREE.MeshStandardMaterial({
@@ -104,25 +101,30 @@ function makeMarkerMesh(initialColor) {
   const plane = new THREE.Mesh(planeGeom, planeMat);
   grp.add(plane);
 
-  const arrow = new THREE.ArrowHelper(
-    new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0.005),
-    0.25, initialColor, 0.08, 0.04,
-  );
-  grp.add(arrow);
+  // Tri-axis gizmo so flips/rolls are obvious — small enough not to clutter.
+  const arrowX = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0.005), 0.22, 0xff4d4d, 0.07, 0.035);
+  const arrowY = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0.005), 0.16, 0x4dff7a, 0.06, 0.03);
+  const arrowZ = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0.005), 0.13, 0x4d9bff, 0.05, 0.025);
+  grp.add(arrowX); grp.add(arrowY); grp.add(arrowZ);
 
-  grp.userData = { plane, arrow };
+  // Witnesses badge — number of cameras that see this marker right now.
+  const sprite = makeTextSprite("");
+  sprite.position.set(0, 0, 0.18);
+  sprite.scale.set(0.35, 0.1, 1);
+  grp.add(sprite);
+
+  grp.userData = { plane, arrowX, sprite };
   return grp;
 }
 
 function makePersonMesh() {
-  // A short pillar (~chest height) so people stand out from raw markers.
   const grp = new THREE.Group();
   const pillarGeom = new THREE.CylinderGeometry(0.12, 0.18, 1.6, 16, 1, false);
   const pillarMat = new THREE.MeshStandardMaterial({
     color: 0x60a5fa, roughness: 0.4, metalness: 0.1, transparent: true, opacity: 0.85,
   });
   const pillar = new THREE.Mesh(pillarGeom, pillarMat);
-  pillar.rotation.x = Math.PI / 2; // cylinder default is along Y; we want along Z (up)
+  pillar.rotation.x = Math.PI / 2;
   pillar.position.z = 0.8;
   grp.add(pillar);
 
@@ -132,7 +134,6 @@ function makePersonMesh() {
   );
   grp.add(arrow);
 
-  // Sprite label
   const sprite = makeTextSprite("");
   sprite.position.set(0, 0, 1.95);
   grp.add(sprite);
@@ -145,7 +146,7 @@ function makeTextSprite(text) {
   const canvas = document.createElement("canvas");
   canvas.width = 256; canvas.height = 64;
   const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "rgba(0,0,0,0)"; ctx.fillRect(0,0,256,64);
+  ctx.fillStyle = "rgba(0,0,0,0)"; ctx.fillRect(0, 0, 256, 64);
   ctx.font = "bold 32px system-ui, sans-serif";
   ctx.fillStyle = "#fff";
   ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.lineWidth = 4;
@@ -174,42 +175,75 @@ function updateSpriteText(sprite, text) {
   tex.needsUpdate = true;
 }
 
-function ensureCameraMarker(pos) {
+function ensureCameraMarker(cameraId, pos) {
   if (!pos) {
-    if (cameraMarker) { scene.remove(cameraMarker); cameraMarker = null; }
+    const m = cameraMarkers.get(cameraId);
+    if (m) { scene.remove(m); cameraMarkers.delete(cameraId); }
     return;
   }
-  if (!cameraMarker) {
-    cameraMarker = new THREE.Group();
-    const geom = new THREE.ConeGeometry(0.18, 0.4, 16);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x0ea5e9, emissive: 0x0c4a6e });
-    const cone = new THREE.Mesh(geom, mat);
-    cone.rotation.x = Math.PI / 2; // tip pointing along +Z (down toward floor)
-    cameraMarker.add(cone);
-    cameraMarker.add(new THREE.Mesh(
+  let m = cameraMarkers.get(cameraId);
+  if (!m) {
+    m = new THREE.Group();
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(0.18, 0.4, 16),
+      new THREE.MeshStandardMaterial({ color: 0x0ea5e9, emissive: 0x0c4a6e }),
+    );
+    cone.rotation.x = Math.PI / 2;
+    m.add(cone);
+    m.add(new THREE.Mesh(
       new THREE.SphereGeometry(0.06, 16, 12),
       new THREE.MeshStandardMaterial({ color: 0x0ea5e9 }),
     ));
-    scene.add(cameraMarker);
+    const sprite = makeTextSprite(`cam ${cameraId}`);
+    sprite.position.set(0, 0, 0.4);
+    sprite.scale.set(0.6, 0.18, 1);
+    m.add(sprite);
+    scene.add(m);
+    cameraMarkers.set(cameraId, m);
   }
-  cameraMarker.position.set(pos[0], pos[1], pos[2]);
+  m.position.set(pos[0], pos[1], pos[2]);
 }
 
-// ---------- update from a scene_world payload ----------------------------
+function pruneCameraMarkers(activeIds) {
+  for (const id of cameraMarkers.keys()) {
+    if (!activeIds.has(id)) {
+      scene.remove(cameraMarkers.get(id));
+      cameraMarkers.delete(id);
+    }
+  }
+}
 
-const ageMs = 1500;  // markers/people fade out this long after last seen
-const lastSeen = new Map();  // key -> timestamp
+// ---------- update from a fused scene_world payload ---------------------
+
+const ageMs = 1500;
+const lastSeen = new Map();
+
+// Three.js Euler order for our convention: scene_world reports yaw/pitch/roll
+// as intrinsic Z-Y-X, which corresponds to Three.js order "ZYX".
+function applyEulerZYX(obj3d, yaw_deg, pitch_deg, roll_deg) {
+  const e = new THREE.Euler(
+    (roll_deg  * Math.PI) / 180,
+    (pitch_deg * Math.PI) / 180,
+    (yaw_deg   * Math.PI) / 180,
+    "ZYX",
+  );
+  obj3d.setRotationFromEuler(e);
+}
 
 function updateScene(world) {
-  if (!world) return;
+  if (!world || !world.world_frame) return;
   ensureFloor(world.world_frame.floor_w_m, world.world_frame.floor_h_m);
-  ensureCameraMarker(world.world_frame.camera_position_world_m);
+
+  const activeCameraIds = new Set();
+  for (const c of world.cameras || []) {
+    activeCameraIds.add(c.camera_id);
+    ensureCameraMarker(c.camera_id, c.camera_position_world_m);
+  }
+  pruneCameraMarkers(activeCameraIds);
 
   const now = performance.now();
 
-  const visibleMarkerIds = new Set();
   for (const m of world.markers || []) {
-    visibleMarkerIds.add(m.aruco_id);
     let mesh = markerMeshes.get(m.aruco_id);
     if (!mesh) {
       mesh = makeMarkerMesh(0x22c55e);
@@ -218,27 +252,24 @@ function updateScene(world) {
     }
     const [x, y, z] = m.world_xyz_m;
     mesh.position.set(x, y, Math.max(0.005, z));
-    // Yaw rotation around world Z so the arrow points along the marker's
-    // facing direction (in the floor plane).
-    mesh.rotation.set(0, 0, (m.yaw_deg * Math.PI) / 180);
+    applyEulerZYX(mesh, m.yaw_deg, m.pitch_deg, m.roll_deg);
     const color = reproErrorColor(m.reproj_error_px);
     mesh.userData.plane.material.color.setHex(color);
-    mesh.userData.arrow.setColor(new THREE.Color(color));
+    const witnesses = (m.witness_camera_ids || []).length;
+    updateSpriteText(mesh.userData.sprite, witnesses > 1 ? `${witnesses}×` : "");
     lastSeen.set("m:" + m.aruco_id, now);
   }
 
-  const visiblePersonKeys = new Set();
   for (const p of world.people || []) {
-    const key = p.person_id != null ? `p:${p.person_id}` : `m:${p.marker_ids[0]}`;
-    if (p.person_id == null) continue;  // unassigned markers are already drawn raw
-    visiblePersonKeys.add(key);
+    if (p.person_id == null) continue;
+    const key = `p:${p.person_id}`;
     let mesh = personMeshes.get(key);
     if (!mesh) {
       mesh = makePersonMesh();
       scene.add(mesh);
       personMeshes.set(key, mesh);
     }
-    const [x, y, _z] = p.body_xyz_m;
+    const [x, y] = p.body_xyz_m;
     mesh.position.set(x, y, 0);
     mesh.rotation.set(0, 0, (p.body_yaw_deg * Math.PI) / 180);
     const label = p.person_name || `#${p.marker_ids.join("+")}`;
@@ -246,7 +277,6 @@ function updateScene(world) {
     lastSeen.set(key, now);
   }
 
-  // Cull any marker / person mesh that hasn't been refreshed in `ageMs`.
   for (const [id, mesh] of markerMeshes) {
     if (now - (lastSeen.get("m:" + id) || 0) > ageMs) {
       scene.remove(mesh); markerMeshes.delete(id);
@@ -260,99 +290,108 @@ function updateScene(world) {
   }
 
   renderPeopleList(world.people || []);
+  renderCamerasList(world.cameras || []);
 }
 
 function renderPeopleList(people) {
-  if (!people.length) {
+  const named = people.filter((p) => p.person_id != null);
+  if (!named.length) {
     peopleList.textContent = "Nothing detected.";
     peopleList.className = "muted";
     return;
   }
   peopleList.className = "";
   peopleList.innerHTML = "";
-  for (const p of people) {
+  for (const p of named) {
     const card = document.createElement("div");
     card.className = "person-card";
-    const [x, y, z] = p.body_xyz_m;
+    const [x, y] = p.body_xyz_m;
     card.innerHTML = `
       <div class="nm">${p.person_name || "(unassigned)"}</div>
       <div class="muted">markers: ${p.marker_ids.join(", ")} · placements: ${p.placements_seen.join("+")}</div>
-      <div>pos: (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}) m</div>
-      <div>yaw: ${p.body_yaw_deg.toFixed(1)}° · conf ${p.confidence}</div>
+      <div>pos: (${x.toFixed(2)}, ${y.toFixed(2)}) m · yaw ${p.body_yaw_deg.toFixed(1)}°</div>
+      <div class="muted">conf ${p.confidence.toFixed(2)}</div>
     `;
     peopleList.appendChild(card);
   }
 }
 
-// ---------- WS plumbing --------------------------------------------------
+function renderCamerasList(cams) {
+  if (!cams.length) {
+    camerasList.innerHTML = `<div class="muted">No cameras publishing. Open <a href="/" target="_blank">/</a> on a device with a webcam, then press <strong>Start</strong>.</div>`;
+    statusEl.textContent = "no publishers";
+    statusEl.style.background = "#374151";
+    return;
+  }
+  statusEl.textContent = `${cams.length} cam · ${cams.reduce((a, c) => a + c.marker_count, 0)} markers`;
+  statusEl.style.background = "#16a34a";
+  camerasList.innerHTML = "";
+  for (const c of cams) {
+    const ageColor = c.age_ms < 500 ? "#22c55e" : c.age_ms < 1500 ? "#f59e0b" : "#ef4444";
+    const card = document.createElement("div");
+    card.className = "person-card";
+    card.innerHTML = `
+      <div class="nm">cam ${c.camera_id} — ${c.name}</div>
+      <div class="muted">${c.marker_count} markers · ${c.fps.toFixed(1)} fps · coverage ${c.coverage_pct}%</div>
+      <div style="font-size:11px;">
+        <span style="color:${ageColor};">●</span>
+        last sample ${c.age_ms} ms ago
+      </div>
+    `;
+    camerasList.appendChild(card);
+  }
+}
 
-const stream = new CameraStream({
-  video: makeHiddenVideo(),  // hidden — we don't show the raw image on /track3d
-  overlayCanvas: null,
-  statusEl,
-  fpsEl,
-});
+// ---------- WS observer plumbing ----------------------------------------
 
-function makeHiddenVideo() {
-  const v = document.createElement("video");
-  v.autoplay = true; v.playsInline = true; v.muted = true;
-  v.style.display = "none";
-  document.body.appendChild(v);
-  return v;
+function openSceneWS() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws/scene`);
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.ok && msg.scene_world) updateScene(msg.scene_world);
+    } catch (_) {}
+  };
+  ws.onclose = () => {
+    statusEl.textContent = "reconnecting…";
+    statusEl.style.background = "#374151";
+    setTimeout(openSceneWS, 1500);
+  };
+  ws.onerror = () => { try { ws.close(); } catch (_) {} };
+  return ws;
 }
 
 const setupGuide = document.getElementById("t3d-setup-guide");
 const setupStep1 = document.getElementById("setup-step-1");
 const setupStep2 = document.getElementById("setup-step-2");
 
-async function refreshCameraInfo() {
+async function refreshCalibrationBanner() {
   try {
     const cams = await api("/api/cameras");
-    const c = cams.find((x) => x.id === 1) || cams[0];
-    if (!c) {
-      camStatus.textContent = "No camera row in DB.";
+    if (!cams.length) {
       banner.innerHTML = `<a href="/admin#cameras">Open Admin → Cameras</a> to set up a camera.`;
       return;
     }
-    const lines = [
-      `${c.name} (id ${c.id})`,
-      c.intrinsic_calibrated
-        ? `intrinsic ✓  reproj ${c.intrinsic_reproj_error_px?.toFixed(2)} px`
-        : `intrinsic ✗  — ChArUco capture not done`,
-      c.extrinsic_calibrated
-        ? `extrinsic ✓  reproj ${c.extrinsic_reproj_error_px?.toFixed(2)} px`
-        : `extrinsic ✗  — four floor corners not solved`,
-      `floor: ${c.floor_rect_w_m} × ${c.floor_rect_h_m} m`,
-      `marker side: ${c.marker_size_m} m`,
-    ];
-    camStatus.textContent = lines.join("\n");
-    camStatus.style.whiteSpace = "pre";
-
-    // Update setup guide steps.
-    if (c.intrinsic_calibrated) {
+    const allIntr = cams.every((c) => c.intrinsic_calibrated);
+    const allExt  = cams.every((c) => c.extrinsic_calibrated);
+    if (allIntr && setupStep1) {
       setupStep1.style.opacity = "0.5";
-      setupStep1.innerHTML = `<strong>Intrinsic calibration</strong> ✓ (reproj ${c.intrinsic_reproj_error_px?.toFixed(2)} px)`;
+      setupStep1.innerHTML = `<strong>Intrinsic calibration</strong> ✓`;
     }
-    if (c.extrinsic_calibrated) {
+    if (allExt && setupStep2) {
       setupStep2.style.opacity = "0.5";
-      setupStep2.innerHTML = `<strong>Extrinsic calibration</strong> ✓ (reproj ${c.extrinsic_reproj_error_px?.toFixed(2)} px)`;
+      setupStep2.innerHTML = `<strong>Extrinsic calibration</strong> ✓`;
     }
-    if (c.intrinsic_calibrated && c.extrinsic_calibrated) {
-      setupGuide.hidden = true;
+    if (allIntr && allExt) {
+      if (setupGuide) setupGuide.hidden = true;
       banner.textContent = "";
     } else {
-      setupGuide.hidden = false;
-      banner.innerHTML = `Step ${c.intrinsic_calibrated ? "2" : "1"} of 2 — open <a href="/admin#cameras">Admin → Cameras</a> to finish calibration.`;
+      if (setupGuide) setupGuide.hidden = false;
+      banner.innerHTML = `Some cameras need calibration — open <a href="/admin#cameras">Admin → Cameras</a>.`;
     }
   } catch (e) {
-    camStatus.textContent = "Error: " + e.message;
-  }
-}
-
-function onMessage(msg, _meta) {
-  if (msg.scene_world) updateScene(msg.scene_world);
-  else {
-    banner.innerHTML = `Calibrate the camera first (intrinsic + extrinsic) to enable 3D — open <a href="/admin">Admin → Cameras</a>.`;
+    banner.textContent = "Error: " + e.message;
   }
 }
 
@@ -374,21 +413,8 @@ function animate() {
 }
 animate();
 
-// ---------- wire UI ------------------------------------------------------
+// ---------- boot --------------------------------------------------------
 
-await stream.listDevices(document.getElementById("t3d-device-select"));
-refreshCameraInfo();
-
-document.getElementById("t3d-start").addEventListener("click", async () => {
-  const [w, h] = document.getElementById("t3d-resolution").value.split("x").map(Number);
-  const fps = Number(document.getElementById("t3d-fps").value);
-  const deviceId = document.getElementById("t3d-device-select").value;
-  document.getElementById("t3d-start").disabled = true;
-  document.getElementById("t3d-stop").disabled = false;
-  await stream.start({ deviceId, width: w, height: h, fps, onMessage });
-});
-document.getElementById("t3d-stop").addEventListener("click", () => {
-  stream.stop();
-  document.getElementById("t3d-start").disabled = false;
-  document.getElementById("t3d-stop").disabled = true;
-});
+refreshCalibrationBanner();
+setInterval(refreshCalibrationBanner, 5000);
+openSceneWS();

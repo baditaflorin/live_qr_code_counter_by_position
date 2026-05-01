@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import io
 import json
@@ -31,7 +32,9 @@ from . import (
     markers as marker_gen,
     observability as obs,
     pose as pose_mod,
+    pose_filter as pose_filter_mod,
     scene as scene_mod,
+    scene_state as scene_state_mod,
     tracking as tracking_mod,
 )
 from .db import (
@@ -944,6 +947,47 @@ def get_camera(camera_id: int, db: Session = Depends(get_db)):
     return _camera_to_out(c)
 
 
+@app.post("/api/cameras", response_model=CameraOut)
+def create_camera(payload: CameraSettingsIn, db: Session = Depends(get_db)):
+    """Add an additional camera (multi-camera setups).  Reuses corner_ids
+    from the default camera unless overridden — they should match across
+    cameras filming the same floor."""
+    name = (payload.name or "").strip() or f"camera-{int(time.time()) % 10000}"
+    c = Camera(name=name)
+    if payload.marker_size_m is not None:
+        c.marker_size_m = float(payload.marker_size_m)
+    if payload.floor_rect_w_m is not None:
+        c.floor_rect_w_m = float(payload.floor_rect_w_m)
+    if payload.floor_rect_h_m is not None:
+        c.floor_rect_h_m = float(payload.floor_rect_h_m)
+    # Inherit corner_ids from camera #1 if the caller didn't supply them.
+    if payload.corner_ids is not None:
+        for k in ("tl", "tr", "br", "bl"):
+            if k not in payload.corner_ids:
+                raise HTTPException(400, f"corner_ids missing key '{k}'")
+        c.corner_ids_json = json.dumps({k: int(payload.corner_ids[k]) for k in ("tl", "tr", "br", "bl")})
+    else:
+        primary = db.get(Camera, 1)
+        if primary is not None and primary.corner_ids_json:
+            c.corner_ids_json = primary.corner_ids_json
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return _camera_to_out(c)
+
+
+@app.delete("/api/cameras/{camera_id}")
+def delete_camera(camera_id: int, db: Session = Depends(get_db)):
+    if camera_id == 1:
+        raise HTTPException(400, "Cannot delete the default camera (id=1)")
+    c = db.get(Camera, camera_id)
+    if not c:
+        raise HTTPException(404, "Camera not found")
+    db.delete(c)
+    db.commit()
+    return {"ok": True}
+
+
 @app.put("/api/cameras/{camera_id}", response_model=CameraOut)
 def update_camera(camera_id: int, payload: CameraSettingsIn, db: Session = Depends(get_db)):
     c = db.get(Camera, camera_id)
@@ -1852,6 +1896,14 @@ async def ws_observe(ws: WebSocket):
 @app.websocket("/ws/detect")
 async def ws_detect(ws: WebSocket):
     await ws.accept()
+    # Each capture client identifies which camera row it represents via
+    # ?camera_id=N (default 1).  All pose estimation, smoothing state, and
+    # multi-camera aggregator publishes are keyed off this id.
+    try:
+        camera_id = int(ws.query_params.get("camera_id", "1"))
+    except (ValueError, TypeError):
+        camera_id = 1
+
     last_state_reload = 0.0
     cached_zones: list[dict] = []
     cached_active: Optional[dict] = None
@@ -1870,6 +1922,13 @@ async def ws_detect(ws: WebSocket):
     drift_monitor = drift_mod.AnchorDriftMonitor()
     drift_configured = False
 
+    # ADR 0048 — per-marker pose filters (IPPE flip resolution + smoothing).
+    # Keyed by aruco_id, lives for the connection lifetime.
+    pose_filters: dict[int, pose_filter_mod.PoseFilter] = {}
+    # Rolling FPS estimate over the last ~2s for the multi-camera aggregator.
+    frame_times: list[float] = []
+    aggregator = scene_state_mod.get_aggregator()
+
     try:
         while True:
             data = await ws.receive_bytes()
@@ -1882,12 +1941,18 @@ async def ws_detect(ws: WebSocket):
                 )
                 bw_window_start = now
                 bw_bytes_in_window = 0
+            frame_times.append(now)
+            cutoff = now - 2.0
+            while frame_times and frame_times[0] < cutoff:
+                frame_times.pop(0)
+            est_fps = (len(frame_times) - 1) / max(0.1, frame_times[-1] - frame_times[0]) \
+                if len(frame_times) >= 2 else 0.0
             if now - last_state_reload > 1.0:
                 cached_active = _load_active_question()
                 active_formation = cached_active.get("formation") if cached_active else None
                 cached_zones = _load_zones_dict(formation=active_formation)
                 cached_tracking = _load_active_tracking()
-                cached_camera = _load_active_camera()
+                cached_camera = _load_active_camera(camera_id)
                 last_state_reload = now
 
             arr = np.frombuffer(data, dtype=np.uint8)
@@ -1934,8 +1999,9 @@ async def ws_detect(ws: WebSocket):
 
             marker_meta = _marker_meta_for(set(d.aruco_id for d in person_results))
 
-            # ADR 0048 — pose estimation when intrinsics are calibrated.
-            # Only run on person_results; control markers don't need 3D pose.
+            # ADR 0048 — pose estimation with IPPE flip resolution + per-marker
+            # temporal smoothing (pose_filter.py). Only person_results — control
+            # markers don't need 3D pose.
             poses: dict[int, detection.PoseDetection] = {}
             if cached_camera and cached_camera.get("K") is not None:
                 poses = detection.estimate_pose(
@@ -1943,11 +2009,20 @@ async def ws_detect(ws: WebSocket):
                     np.array(cached_camera["K"], dtype=np.float64),
                     np.array(cached_camera["dist"], dtype=np.float64),
                     cached_camera["marker_size_m"],
+                    filters=pose_filters,
+                    ts=now,
                 )
+            # Drop filter state for markers that disappeared — keeps the dict
+            # bounded and lets a marker that genuinely re-enters reset cleanly.
+            seen_ids = {d.aruco_id for d in person_results}
+            for stale in [k for k in pose_filters if k not in seen_ids
+                          and (now - (pose_filters[k]._state.last_ts if pose_filters[k]._state else 0)) > 2.0]:
+                pose_filters.pop(stale, None)
 
             # ADR 0050 — single-camera scene reconstruction.
             scene_payload: Optional[dict] = None
             extrinsic: Optional[pose_mod.Extrinsic] = None
+            marker_obs: list[scene_mod.MarkerObservation] = []
             if cached_camera and cached_camera.get("R") is not None and poses:
                 extrinsic = pose_mod.Extrinsic(
                     R=np.array(cached_camera["R"], dtype=np.float64),
@@ -1957,6 +2032,7 @@ async def ws_detect(ws: WebSocket):
                     person_results, poses, extrinsic, marker_meta
                 )
                 people = scene_mod.fuse_person_observations(marker_obs)
+                coverage = round(100.0 * len(poses) / max(1, len(person_results)), 1)
                 scene_payload = {
                     "world_frame": {
                         "floor_w_m": cached_camera["floor_w_m"],
@@ -1965,10 +2041,21 @@ async def ws_detect(ws: WebSocket):
                     },
                     "markers": [scene_mod.serialize_marker(m) for m in marker_obs],
                     "people":  [scene_mod.serialize_person(p) for p in people],
-                    "coverage_pct": (
-                        round(100.0 * len(poses) / max(1, len(person_results)), 1)
-                    ),
+                    "coverage_pct": coverage,
                 }
+
+                # Publish to multi-camera aggregator so /ws/scene observers
+                # see this camera's contribution.
+                await aggregator.update_camera(
+                    camera_id=cached_camera["id"],
+                    camera_name=cached_camera.get("name") or f"camera-{cached_camera['id']}",
+                    markers=marker_obs,
+                    world_frame=scene_payload["world_frame"],
+                    fps=est_fps,
+                    intrinsic_calibrated=True,
+                    extrinsic_calibrated=True,
+                    coverage_pct=coverage,
+                )
 
             detections_payload = []
             corner_centers_px: dict[str, list[float]] = {}
@@ -2104,6 +2191,42 @@ async def ws_detect(ws: WebSocket):
             await ws.send_json({"ok": False, "error": str(e)})
         except Exception:
             pass
+    finally:
+        # Drop this camera from the aggregator so observers see it disappear.
+        try:
+            await aggregator.remove_camera(camera_id)
+        except Exception:
+            pass
+
+
+# ---------- multi-camera scene observer ----------
+
+@app.websocket("/ws/scene")
+async def ws_scene(ws: WebSocket):
+    """Observer-only WS — pushes the fused multi-camera scene at ~10 Hz.
+
+    Used by /track3d (and any other dashboard that wants to render the world
+    state without owning a camera).  No frame upload is accepted.
+    """
+    await ws.accept()
+    aggregator = scene_state_mod.get_aggregator()
+    last_version_sent = -1
+    try:
+        while True:
+            v = aggregator.version
+            scene = await aggregator.fused_scene()
+            await ws.send_json({"ok": True, "scene_world": scene, "version": v})
+            last_version_sent = v
+            # 10 Hz cadence is enough for a smooth 3D view; keeps payload size
+            # well under 16 KB even with ~30 markers and ~10 people.
+            await asyncio.sleep(0.1)
+    except WebSocketDisconnect:
+        return
+    except Exception as e:  # noqa: BLE001
+        try:
+            await ws.send_json({"ok": False, "error": str(e)})
+        except Exception:
+            pass
 
 
 def _load_zones_dict(formation: Optional[str] = None) -> list[dict]:
@@ -2209,12 +2332,12 @@ def _marker_meta_for(aruco_ids: set[int]) -> dict[int, dict]:
         db.close()
 
 
-def _load_active_camera() -> Optional[dict]:
-    """The current single-camera deployment uses id=1.  Returns None if missing."""
+def _load_active_camera(camera_id: int = 1) -> Optional[dict]:
+    """Load calibration + frame metadata for a camera row.  Returns None if missing."""
     from .db import SessionLocal
     db = SessionLocal()
     try:
-        c = db.get(Camera, 1)
+        c = db.get(Camera, camera_id)
         if c is None:
             return None
         cam_pos: Optional[list[float]] = None

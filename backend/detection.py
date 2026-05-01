@@ -7,16 +7,23 @@ Detection has two layers:
 2. **6-DOF pose** (ADR 0048) — `estimate_pose()` adds `(rvec, tvec)` per
    detection when intrinsics are available.  Returned as a `PoseDetection`.
 
+`estimate_pose()` optionally accepts a per-marker `PoseFilter` dict that
+resolves the IPPE_SQUARE flip ambiguity using temporal continuity and
+applies a quaternion-slerp smoother — see `pose_filter.py`.
+
 The pose layer is intentionally separate so the live overlay (which only
 needs 2D corners) doesn't pay the calibration-required tax, and so the
 WS payload can fall through gracefully on uncalibrated cameras.
 """
 import os
+import time as _time
 from dataclasses import dataclass
 from typing import Optional
 
 import cv2
 import numpy as np
+
+from . import pose_filter as _pose_filter
 
 DICT_NAME = os.environ.get("ARUCO_DICTIONARY", "DICT_4X4_100")
 
@@ -115,41 +122,46 @@ def estimate_pose(
     K: np.ndarray,
     dist: np.ndarray,
     marker_size_m: float,
+    *,
+    filters: Optional[dict[int, "_pose_filter.PoseFilter"]] = None,
+    ts: Optional[float] = None,
 ) -> dict[int, PoseDetection]:
     """6-DOF pose per detected marker (ADR 0048).
 
-    `cv2.aruco.estimatePoseSingleMarkers` was deprecated in OpenCV 4.7 in
-    favour of `solvePnP` per marker; this helper uses the recommended path
-    so it works across OpenCV 4.7–4.10 without warnings.
-
-    Returns a dict keyed by `aruco_id`.  Markers with degenerate corners
-    (rare; happens at the image edge) are silently skipped.
+    Uses `cv2.solvePnPGeneric(SOLVEPNP_IPPE_SQUARE)` to obtain *both* candidate
+    solutions for the planar 4-point case, then resolves the flip ambiguity
+    via the per-marker `PoseFilter` (closest-to-previous on rotation) and
+    applies temporal smoothing.  Without `filters`, falls back to the
+    lower-reprojection candidate per frame (legacy behaviour).
     """
     if not detections:
         return {}
     K = np.asarray(K, dtype=np.float64)
     dist = np.asarray(dist, dtype=np.float64).reshape(-1)
     obj_pts = _marker_object_points(marker_size_m)
+    ts = ts if ts is not None else _time.time()
 
     out: dict[int, PoseDetection] = {}
     for d in detections:
         img_pts = d._raw_corners.reshape(-1, 1, 2).astype(np.float32)
-        try:
-            ok, rvec, tvec = cv2.solvePnP(
-                obj_pts, img_pts, K, dist, flags=cv2.SOLVEPNP_IPPE_SQUARE
-            )
-        except cv2.error:
+        candidates = _pose_filter.solve_pose_ippe(img_pts, obj_pts, K, dist)
+        if not candidates:
             continue
-        if not ok:
-            continue
-        proj, _ = cv2.projectPoints(obj_pts, rvec, tvec, K, dist)
-        err = float(
-            np.mean(np.linalg.norm(proj.reshape(-1, 2) - img_pts.reshape(-1, 2), axis=1))
-        )
+
+        if filters is not None:
+            f = filters.setdefault(d.aruco_id, _pose_filter.PoseFilter())
+            res = f.update(candidates, ts)
+            if res is None:
+                continue
+            rvec, tvec, err = res
+        else:
+            best = min(candidates, key=lambda c: c.reproj_error_px)
+            rvec, tvec, err = best.rvec, best.tvec, best.reproj_error_px
+
         out[d.aruco_id] = PoseDetection(
             aruco_id=d.aruco_id,
-            rvec=rvec.reshape(3),
-            tvec=tvec.reshape(3),
+            rvec=np.asarray(rvec).reshape(3),
+            tvec=np.asarray(tvec).reshape(3),
             reproj_error_px=err,
         )
     return out
