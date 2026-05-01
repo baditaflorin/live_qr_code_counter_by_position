@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Present</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --paper: #f5ecd2;
+    --muted: #6b7790;
+    --accent: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: var(--bg); color: var(--paper);
+    font-family: "DejaVu Serif", "Georgia", serif;
+    overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+  }
+  body {
+    display: flex; flex-direction: column;
+    padding: 4vh 6vw;
+  }
+
+  .head { font-size: 1.4vw; letter-spacing: 0.4em; text-transform: uppercase;
+          color: var(--muted); text-align: center; margin-bottom: 2vh; }
+  .head .live-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+                    background: #ef4444; margin-right: 8px; vertical-align: middle;
+                    animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
+
+  .question-block { font-size: 1.6vw; letter-spacing: 0.2em; color: var(--accent); text-align: center; margin-bottom: 2vh; }
+  .question-text { font-size: 4.5vw; line-height: 1.18; font-weight: 700; text-align: center;
+                   max-width: 86vw; margin: 0 auto 4vh; transition: opacity 0.6s ease; }
+  .question-text.fade { opacity: 0; }
+  .question-text:empty::before { content: "Waiting for an active question…"; color: var(--muted); font-weight: 400; font-size: 0.6em; }
+
+  .zones { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3vw; flex: 1;
+           align-items: stretch; padding-bottom: 2vh; }
+  .zones.few { grid-template-columns: repeat(2, 1fr); grid-auto-flow: row; }
+  .zones.matrix { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, 1fr); grid-auto-flow: row; }
+
+  .zone {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.03);
+    border-radius: 24px; padding: 4vh 2vw;
+    border-top: 6px solid; position: relative;
+  }
+  .zone .label { font-size: 2vw; font-weight: 600; color: var(--paper);
+                 letter-spacing: 0.05em; margin-bottom: 1vh; text-align: center; line-height: 1.15; }
+  .zone .count { font-size: 14vw; line-height: 1; font-weight: 800; font-variant-numeric: tabular-nums;
+                 transition: transform 0.3s ease; }
+  .zone .count.bump { transform: scale(1.08); }
+
+  .formation-pill { display: inline-block; padding: 0.4vh 1.2vw;
+                    border: 1px solid var(--muted); border-radius: 999px;
+                    color: var(--muted); font-size: 1vw; letter-spacing: 0.2em;
+                    text-transform: uppercase; margin-left: 1.5vw; vertical-align: middle; }
+
+  .footer { text-align: center; font-size: 0.85vw; color: var(--muted);
+            letter-spacing: 0.3em; text-transform: uppercase; margin-top: auto; }
+
+  .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center;
+                 flex: 1; color: var(--muted); }
+  .empty-state .big { font-size: 6vw; margin-bottom: 2vh; }
+  .empty-state .small { font-size: 1.4vw; letter-spacing: 0.2em; text-transform: uppercase; }
+
+  /* Theme: light variant for projectors that handle dark backgrounds poorly. */
+  body.theme-light { background: var(--paper); color: #1a2840; }
+  body.theme-light .zone { background: rgba(0,0,0,0.04); }
+  body.theme-light .head, body.theme-light .footer, body.theme-light .empty-state, body.theme-light .formation-pill { color: #6b6048; }
+  body.theme-light .empty-state .big { color: #1a2840; }
+</style>
+</head>
+<body>
+  <div class="head"><span class="live-dot"></span><span id="head-label">·  WITNESS  ·  CZOCHA  ·  WEMESHUP  ·</span></div>
+  <div class="question-block" id="block"></div>
+  <div class="question-text" id="qtext"></div>
+  <div class="zones" id="zones"></div>
+  <div class="footer" id="footer">live.qr.wemeshup.com  ·  press <kbd>Esc</kbd> for live view</div>
+  <div class="empty-state" id="empty" hidden>
+    <div class="big">·</div>
+    <div class="small">No question active</div>
+  </div>
+
+<script type="module">
+import { audioCues } from "/static/lib/audio-cues.js";
+const blockEl = document.getElementById("block");
+const qTextEl = document.getElementById("qtext");
+const zonesEl = document.getElementById("zones");
+const emptyEl = document.getElementById("empty");
+
+let lastQuestionId = null;
+let zoneRefs = new Map();
+
+// Optional theme override via ?theme=light
+if (new URLSearchParams(location.search).get("theme") === "light") {
+  document.body.classList.add("theme-light");
+}
+// Esc → live view
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") location.assign("/"); });
+
+function renderQuestion(active) {
+  if (!active) {
+    blockEl.textContent = "";
+    qTextEl.textContent = "";
+    emptyEl.hidden = false;
+    audioCues.silentMode(false);
+    return;
+  }
+  emptyEl.hidden = true;
+  // Privilege walk: silence room-facing cues (no question-advance whoosh).
+  audioCues.silentMode(active.formation === "privilege_walk");
+
+  const newId = active.id;
+  if (newId !== lastQuestionId) {
+    qTextEl.classList.add("fade");
+    setTimeout(() => {
+      blockEl.textContent = (active.block || "") + (active.formation ? " · " : "") + (active.formation ? active.formation.toUpperCase() : "");
+      qTextEl.textContent = (active.position ? `${active.position}.  ` : "") + active.text;
+      qTextEl.classList.remove("fade");
+    }, 350);
+    if (lastQuestionId !== null) audioCues.play("question_advance");
+    lastQuestionId = newId;
+  } else {
+    qTextEl.textContent = (active.position ? `${active.position}.  ` : "") + active.text;
+  }
+}
+
+function renderZones(zones, counts) {
+  // Pick a layout class based on zone count and the active formation.
+  zonesEl.className = "zones";
+  if (zones.length === 4) zonesEl.classList.add("matrix");
+  else if (zones.length === 2) zonesEl.classList.add("few");
+
+  // Diff: keep nodes that already exist so the count's bump animation persists.
+  const newRefs = new Map();
+  zonesEl.innerHTML = "";
+  for (const z of zones) {
+    const div = document.createElement("div");
+    div.className = "zone";
+    div.style.borderTopColor = z.color || "#f59e0b";
+    const label = document.createElement("div");
+    label.className = "label";
+    label.textContent = z.label || z.name;
+    const count = document.createElement("div");
+    count.className = "count";
+    count.style.color = z.color || "#f59e0b";
+    count.textContent = String(counts[z.id] || 0);
+    div.appendChild(label); div.appendChild(count);
+    zonesEl.appendChild(div);
+    newRefs.set(z.id, count);
+  }
+
+  // Bump animation for changed counts.
+  for (const [zid, prevEl] of zoneRefs) {
+    const newCount = counts[zid] || 0;
+    const prev = parseInt(prevEl.textContent || "0", 10);
+    if (newCount !== prev) {
+      const fresh = newRefs.get(zid);
+      if (fresh) {
+        fresh.classList.add("bump");
+        setTimeout(() => fresh.classList.remove("bump"), 300);
+      }
+    }
+  }
+  zoneRefs = newRefs;
+}
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws/observe`);
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (!msg.ok) return;
+    renderQuestion(msg.active_question);
+    renderZones(msg.zones || [], msg.zone_counts || {});
+  };
+  ws.onclose = () => setTimeout(connect, 2000);
+  ws.onerror = () => { try { ws.close(); } catch {} };
+  // Heartbeat — observer must send periodically or some proxies time us out.
+  setInterval(() => { try { ws.readyState === 1 && ws.send("ping"); } catch {} }, 20000);
+}
+connect();
+</script>
+</body>
+</html>

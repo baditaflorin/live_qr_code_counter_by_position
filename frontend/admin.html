@@ -37,6 +37,24 @@
       </div>
     </div>
     <div class="panel">
+      <h3 style="margin-top:0;">Import roster (CSV)</h3>
+      <div class="row">
+        <input id="roster-file" type="file" accept=".csv,text/csv" />
+        <label>On conflict:
+          <select id="roster-conflict">
+            <option value="skip" selected>Skip if name exists</option>
+            <option value="merge">Merge (top up markers)</option>
+            <option value="create">Create anyway (allows duplicates)</option>
+          </select>
+        </label>
+        <button id="roster-dry-run">Dry run</button>
+        <button id="roster-import" class="primary" disabled>Import</button>
+        <span class="spacer"></span>
+        <span class="muted" style="font-size:12px;">Required column: <code>name</code> · Optional: <code>notes</code>, <code>marker_count</code></span>
+      </div>
+      <div id="roster-preview" class="muted" style="margin-top:10px; font-size:13px;"></div>
+    </div>
+    <div class="panel">
       <h3 style="margin-top:0;">People</h3>
       <div id="people-list"></div>
     </div>

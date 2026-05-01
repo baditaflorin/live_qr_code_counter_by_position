@@ -1,4 +1,5 @@
 import { api, el, clear, fmtTime } from "/static/common.js";
+import { audioCues } from "/static/lib/audio-cues.js";
 
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
@@ -166,6 +167,7 @@ function openWS() {
       drawOverlay(msg);
       renderZoneCounts(msg.zone_counts || {}, zonesCache);
       renderDetected(msg.detections || []);
+      maybeClusterCue(msg.zone_counts);
       tickFps();
     } catch (e) {
       console.error(e);
@@ -173,9 +175,12 @@ function openWS() {
   };
 }
 
+let _lastActiveQuestionId = null;
 function renderActiveBanner(active) {
   if (!active) {
     activeBannerEl.hidden = true;
+    audioCues.silentMode(false);
+    _lastActiveQuestionId = null;
     return;
   }
   activeBannerEl.hidden = false;
@@ -186,6 +191,24 @@ function renderActiveBanner(active) {
     activeFormationEl.hidden = false;
   } else {
     activeFormationEl.hidden = true;
+  }
+  // Privilege-walk formation: silence room-facing audio cues per ADR 0016.
+  audioCues.silentMode(active.formation === "privilege_walk");
+  // Cue: question changed.
+  if (_lastActiveQuestionId !== null && _lastActiveQuestionId !== active.id) {
+    audioCues.play("question_advance");
+  }
+  _lastActiveQuestionId = active.id;
+}
+
+// Cluster cue — plays a soft chord when 5+ markers are co-located in any
+// zone for the first time (debounced to once every 10 seconds).
+let _lastClusterCue = 0;
+function maybeClusterCue(zoneCounts) {
+  const now = performance.now();
+  if (now - _lastClusterCue < 10000) return;
+  for (const c of Object.values(zoneCounts || {})) {
+    if (c >= 5) { audioCues.play("cluster_chord"); _lastClusterCue = now; return; }
   }
 }
 
@@ -368,6 +391,7 @@ snapshotBtn.addEventListener("click", async () => {
   try {
     const res = await api(`/api/questions/${qid}/snapshot/record`, { method: "POST", body: payload });
     lastSnapshotEl.textContent = `Saved snapshot #${res.snapshot_id} with ${res.votes} markers at ${new Date().toLocaleTimeString()}`;
+    audioCues.play("snapshot");
   } catch (e) {
     alert("Snapshot failed: " + e.message);
   }

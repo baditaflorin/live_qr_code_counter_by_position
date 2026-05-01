@@ -1,5 +1,6 @@
 // Tracking session controls (start / stop / list / pick-for-report).
 import { api, el, clear, fmtTime } from "/static/common.js";
+import { audioCues } from "/static/lib/audio-cues.js";
 
 const startForm = document.getElementById("track-start-form");
 const startBtn = document.getElementById("track-start-btn");
@@ -35,6 +36,7 @@ async function onStart() {
       method: "POST",
       body: { name, proximity_norm: proximity, sample_interval_ms: interval },
     });
+    audioCues.play("tracking_start");
     await refresh();
   } catch (e) { alert(e.message); }
 }
@@ -44,6 +46,7 @@ async function onStop() {
   if (!confirm("Stop tracking? You can still view the report afterwards.")) return;
   try {
     await api(`/api/tracking/sessions/${_activeId}/stop`, { method: "PUT" });
+    audioCues.play("tracking_stop");
     await refresh();
   } catch (e) { alert(e.message); }
 }
