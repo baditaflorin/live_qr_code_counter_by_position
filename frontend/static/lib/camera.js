@@ -57,8 +57,9 @@ export class CameraStream {
     }
   }
 
-  async start({ deviceId, width = 1280, height = 720, fps = 10, onMessage }) {
+  async start({ deviceId, width = 1280, height = 720, fps = 10, cameraId = null, onMessage }) {
     this.onMessage = onMessage;
+    this.cameraId = cameraId;  // server-side camera_id this stream publishes as
     this.setStatus("starting...");
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
@@ -105,7 +106,8 @@ export class CameraStream {
 
   _openWs() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    this.ws = new WebSocket(`${proto}://${location.host}${this.wsPath}`);
+    const qs = this.cameraId != null ? `?camera_id=${encodeURIComponent(this.cameraId)}` : "";
+    this.ws = new WebSocket(`${proto}://${location.host}${this.wsPath}${qs}`);
     this.ws.binaryType = "arraybuffer";
     this.ws.onopen = () => this.setStatus("live", "ok");
     this.ws.onclose = () => this.setStatus("disconnected", "err");

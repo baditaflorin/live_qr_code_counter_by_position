@@ -212,6 +212,12 @@
         marker cards to the floor corners. After both, every detected marker reports world XYZ + yaw/pitch/roll, and
         <a href="/track3d" target="_blank">/track3d</a> shows the scene in metres.
       </p>
+      <div class="row" style="margin-bottom: 12px;">
+        <input id="new-camera-name" type="text" placeholder="New camera name (e.g. ceiling-east)" style="flex:1; min-width:240px;" />
+        <button id="add-camera-btn" class="primary">+ Add camera</button>
+        <span class="spacer"></span>
+        <span class="muted" style="font-size:12px;">Multi-camera setups: each physical camera = one row, calibrated separately.</span>
+      </div>
       <div id="cameras-list"></div>
     </div>
 

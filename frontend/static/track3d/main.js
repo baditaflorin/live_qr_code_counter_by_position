@@ -256,7 +256,18 @@ function updateScene(world) {
     const color = reproErrorColor(m.reproj_error_px);
     mesh.userData.plane.material.color.setHex(color);
     const witnesses = (m.witness_camera_ids || []).length;
-    updateSpriteText(mesh.userData.sprite, witnesses > 1 ? `${witnesses}×` : "");
+    let label = "";
+    if (witnesses > 1) {
+      // "2× ⚠ 12cm" if disagreement is loose, just "2×" otherwise.
+      if (m.disagreement_cm != null && m.disagreement_cm > 5) {
+        label = `${witnesses}× ⚠ ${m.disagreement_cm.toFixed(0)}cm`;
+      } else if (m.disagreement_cm != null) {
+        label = `${witnesses}× ${m.disagreement_cm.toFixed(0)}cm`;
+      } else {
+        label = `${witnesses}×`;
+      }
+    }
+    updateSpriteText(mesh.userData.sprite, label);
     lastSeen.set("m:" + m.aruco_id, now);
   }
 
@@ -328,14 +339,19 @@ function renderCamerasList(cams) {
   camerasList.innerHTML = "";
   for (const c of cams) {
     const ageColor = c.age_ms < 500 ? "#22c55e" : c.age_ms < 1500 ? "#f59e0b" : "#ef4444";
+    const errColor = c.mean_reproj_error_px == null ? "#9ca3af"
+      : c.mean_reproj_error_px <= 0.6 ? "#22c55e"
+      : c.mean_reproj_error_px <= 1.5 ? "#f59e0b" : "#ef4444";
     const card = document.createElement("div");
     card.className = "person-card";
+    const errBadge = c.mean_reproj_error_px != null
+      ? `<span style="color:${errColor};">● reproj ${c.mean_reproj_error_px.toFixed(2)} px</span>`
+      : `<span class="muted">no markers</span>`;
     card.innerHTML = `
       <div class="nm">cam ${c.camera_id} — ${c.name}</div>
       <div class="muted">${c.marker_count} markers · ${c.fps.toFixed(1)} fps · coverage ${c.coverage_pct}%</div>
       <div style="font-size:11px;">
-        <span style="color:${ageColor};">●</span>
-        last sample ${c.age_ms} ms ago
+        <span style="color:${ageColor};">●</span> last sample ${c.age_ms} ms ago · ${errBadge}
       </div>
     `;
     camerasList.appendChild(card);
