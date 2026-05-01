@@ -1,3 +1,4 @@
+import csv
 import io
 import json
 import os
@@ -11,7 +12,8 @@ import cv2
 import numpy as np
 import qrcode
 from fastapi import (
-    Depends, FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect,
+    Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile,
+    WebSocket, WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -141,6 +143,166 @@ def delete_person(person_id: int, db: Session = Depends(get_db)):
     db.delete(p)
     db.commit()
     return {"ok": True}
+
+
+# ---------- CSV roster import ----------
+#
+# Implements ADR 0007. Required column: name. Optional: notes, marker_count
+# (defaults to 1), tags (semicolon-separated, ignored for now — reserved for
+# the participant-card kit's future per-person tagging).
+#
+# `dry_run=true` parses + validates without writing. `on_conflict` controls
+# what to do when a name already exists: skip | merge | create.
+
+def _parse_roster_csv(raw_bytes: bytes) -> list[dict]:
+    """Tolerant CSV reader: BOM-stripped, comma + semicolon dialects, blank rows skipped."""
+    text = raw_bytes.decode("utf-8-sig", errors="replace").strip()
+    if not text:
+        return []
+    sample = text[:2048]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t"])
+    except csv.Error:
+        dialect = csv.excel  # fall back to comma
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    rows: list[dict] = []
+    for raw in reader:
+        # Lowercase + strip header keys.
+        row = {(k or "").strip().lower(): (v or "").strip() for k, v in raw.items()}
+        if not row.get("name"):
+            continue  # skip blank rows / header-only
+        rows.append(row)
+    return rows
+
+
+def _next_aruco_ids(db: Session, n: int) -> list[int]:
+    """Reserve N new marker ids; raises if dictionary capacity is exceeded."""
+    dict_size = detection.dictionary_size()
+    start = _next_aruco_id(db)
+    if start + n > dict_size:
+        remaining = max(0, dict_size - start)
+        raise HTTPException(
+            400,
+            f"Dictionary {detection.get_dictionary_name()} only holds {dict_size} markers; "
+            f"{n} more would overflow ({remaining} remaining). Switch ARUCO_DICTIONARY.",
+        )
+    return list(range(start, start + n))
+
+
+@app.post("/api/people/import")
+async def import_roster(
+    file: UploadFile = File(...),
+    dry_run: bool = Form(False),
+    on_conflict: str = Form("skip"),  # skip | merge | create
+    db: Session = Depends(get_db),
+):
+    if on_conflict not in ("skip", "merge", "create"):
+        raise HTTPException(400, "on_conflict must be skip | merge | create")
+
+    raw = await file.read()
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(413, "CSV too large (>5 MB)")
+
+    try:
+        rows = _parse_roster_csv(raw)
+    except UnicodeDecodeError:
+        raise HTTPException(400, "CSV must be UTF-8 encoded")
+
+    if not rows:
+        return {"ok": True, "rows": 0, "outcomes": [], "dry_run": dry_run}
+
+    # Pre-compute requested marker count so we can fail fast on dictionary overflow.
+    requested_markers = sum(max(0, _safe_int(r.get("marker_count"), 1)) for r in rows
+                            if not (on_conflict == "skip"
+                                    and _existing_person_by_name(db, r["name"])))
+
+    if not dry_run and requested_markers > 0:
+        # Just validate capacity; we'll allocate per-row inside the transaction.
+        dict_size = detection.dictionary_size()
+        next_id = _next_aruco_id(db)
+        if next_id + requested_markers > dict_size:
+            raise HTTPException(
+                400,
+                f"Need {requested_markers} marker ids; dictionary {detection.get_dictionary_name()} "
+                f"has {max(0, dict_size - next_id)} remaining.",
+            )
+
+    outcomes: list[dict] = []
+    for i, row in enumerate(rows, start=2):  # row 1 is the header
+        name = row["name"]
+        notes = row.get("notes") or None
+        marker_count = max(0, _safe_int(row.get("marker_count"), 1))
+
+        existing = _existing_person_by_name(db, name)
+
+        try:
+            if existing and on_conflict == "skip":
+                outcomes.append({"row": i, "name": name, "status": "skipped",
+                                 "person_id": existing.id,
+                                 "marker_ids": [m.aruco_id for m in existing.markers]})
+                continue
+
+            if existing and on_conflict == "merge":
+                if dry_run:
+                    extra = max(0, marker_count - len(existing.markers))
+                    outcomes.append({"row": i, "name": name, "status": "would_merge",
+                                     "person_id": existing.id,
+                                     "would_add_markers": extra})
+                else:
+                    extra = max(0, marker_count - len(existing.markers))
+                    new_ids = _next_aruco_ids(db, extra) if extra else []
+                    for mid in new_ids:
+                        m = Marker(aruco_id=mid, dictionary=detection.get_dictionary_name(),
+                                   person_id=existing.id)
+                        db.add(m)
+                        db.flush()
+                    outcomes.append({"row": i, "name": name, "status": "merged",
+                                     "person_id": existing.id, "marker_ids": new_ids})
+                continue
+
+            # create (either no existing, or on_conflict == create which always creates).
+            if dry_run:
+                outcomes.append({"row": i, "name": name, "status": "would_create",
+                                 "would_create_markers": marker_count})
+            else:
+                p = Person(name=name, notes=notes)
+                db.add(p)
+                db.flush()
+                new_ids = _next_aruco_ids(db, marker_count) if marker_count else []
+                for mid in new_ids:
+                    m = Marker(aruco_id=mid, dictionary=detection.get_dictionary_name(),
+                               person_id=p.id)
+                    db.add(m)
+                    db.flush()
+                outcomes.append({"row": i, "name": name, "status": "created",
+                                 "person_id": p.id, "marker_ids": new_ids})
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception as e:  # noqa: BLE001
+            db.rollback()
+            outcomes.append({"row": i, "name": name, "status": "error", "error": str(e)})
+            return {"ok": False, "rows": len(rows), "outcomes": outcomes, "dry_run": dry_run}
+
+    if not dry_run:
+        db.commit()
+
+    return {"ok": True, "rows": len(rows), "outcomes": outcomes, "dry_run": dry_run}
+
+
+def _safe_int(s: Optional[str], default: int) -> int:
+    if s is None or s == "":
+        return default
+    try:
+        return int(str(s).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _existing_person_by_name(db: Session, name: str) -> Optional[Person]:
+    return db.execute(
+        select(Person).options(joinedload(Person.markers)).where(Person.name == name)
+    ).unique().scalars().first()
 
 
 # ---------- markers ----------
