@@ -93,6 +93,17 @@ function renderList() {
         },
       }, "Clear extrinsic"));
     }
+    if (c.id !== 1) {
+      actions.appendChild(el("button", {
+        class: "danger",
+        onclick: async () => {
+          if (!confirm(`Delete camera ${c.id} (${c.name})? Calibration is lost.`)) return;
+          await api(`/api/cameras/${c.id}`, { method: "DELETE" });
+          if (activeCameraId === c.id) activeCameraId = 1;
+          await loadCameras();
+        },
+      }, "Delete camera"));
+    }
     row.appendChild(actions);
     root.appendChild(row);
   }
@@ -411,6 +422,23 @@ export function initCameras() {
   document.getElementById("ex-start-cam").addEventListener("click", () => startExtrinsicCamera());
   document.getElementById("ex-stop-cam").addEventListener("click", () => stopExtrinsicCamera());
   document.getElementById("ex-solve").addEventListener("click", () => solveExtrinsic());
+
+  const addBtn = document.getElementById("add-camera-btn");
+  if (addBtn) addBtn.addEventListener("click", async () => {
+    const nameInput = document.getElementById("new-camera-name");
+    const name = (nameInput.value || "").trim();
+    try {
+      const created = await api("/api/cameras", {
+        method: "POST",
+        body: { name: name || null },
+      });
+      nameInput.value = "";
+      activeCameraId = created.id;
+      await loadCameras();
+    } catch (e) {
+      alert("Add camera failed: " + e.message);
+    }
+  });
 
   // Lazy-list video devices when the tab opens.
   const onTabSwitch = new MutationObserver(() => {
