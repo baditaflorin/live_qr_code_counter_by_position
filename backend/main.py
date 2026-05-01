@@ -770,9 +770,19 @@ def clear_extrinsic(camera_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/calibration/charuco-board.png")
 def charuco_board_png(size_px: int = 1500):
-    """Printable ChArUco board.  Print on A4 (or larger), keep flat."""
     png = pose_mod.render_charuco_board_png(detection.get_dictionary(), size_px=size_px)
     return Response(content=png, media_type="image/png")
+
+
+@app.get("/api/calibration/charuco-qr")
+def charuco_qr(request: Request):
+    """QR code that opens the fullscreen /charuco tablet page."""
+    base = str(request.base_url).rstrip("/")
+    url = f"{base}/charuco"
+    img = qrcode.make(url)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
 
 
 @app.post("/api/cameras/{camera_id}/calibration/intrinsic/start", response_model=CalibrationStatus)
@@ -1857,6 +1867,12 @@ def track3d_page():
 @app.get("/present")
 def present_page():
     return FileResponse(str(FRONTEND / "present.html"))
+
+
+@app.get("/charuco")
+def charuco_page():
+    """Fullscreen ChArUco board for tablet display during intrinsic calibration."""
+    return FileResponse(str(FRONTEND / "charuco.html"))
 
 
 @app.get("/m/{aruco_id}")

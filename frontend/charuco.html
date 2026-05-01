@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ChArUco board — hold in front of camera</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  img {
+    max-width: 100vw;
+    max-height: 100vh;
+    object-fit: contain;
+    display: block;
+  }
+  #hint {
+    position: fixed;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.55);
+    color: #fff;
+    font-family: system-ui, sans-serif;
+    font-size: 13px;
+    padding: 6px 14px;
+    border-radius: 20px;
+    pointer-events: none;
+    transition: opacity 0.5s;
+  }
+</style>
+</head>
+<body>
+<img src="/api/calibration/charuco-board.png" alt="ChArUco calibration board" />
+<div id="hint">Keep screen on · tilt slowly · keep flat and well-lit</div>
+<script>
+  // Try to keep the screen awake while this page is open.
+  let wakeLock = null;
+  async function acquireWakeLock() {
+    if ("wakeLock" in navigator) {
+      try { wakeLock = await navigator.wakeLock.request("screen"); } catch (_) {}
+    }
+  }
+  acquireWakeLock();
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") acquireWakeLock();
+  });
+
+  // Hide the hint after 4 seconds.
+  setTimeout(() => { document.getElementById("hint").style.opacity = "0"; }, 4000);
+</script>
+</body>
+</html>
