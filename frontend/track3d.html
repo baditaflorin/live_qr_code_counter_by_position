@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Track 3D — world frame</title>
+<link rel="stylesheet" href="/static/styles.css" />
+<style>
+  .t3d-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) 320px;
+    gap: 16px;
+    align-items: flex-start;
+  }
+  @media (max-width: 1000px) { .t3d-grid { grid-template-columns: 1fr; } }
+  #t3d-canvas-wrap {
+    position: relative;
+    width: 100%;
+    height: 600px;
+    background: #060912;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  #t3d-canvas-wrap canvas { display: block; }
+  #t3d-overlay {
+    position: absolute; top: 8px; left: 12px;
+    color: #fff; font-family: ui-monospace, SF Mono, monospace;
+    font-size: 12px; pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  }
+  .t3d-legend {
+    display: grid;
+    grid-template-columns: 14px 1fr;
+    gap: 6px 10px;
+    align-items: center;
+    font-size: 12px;
+  }
+  .t3d-legend .swatch { width: 14px; height: 14px; border-radius: 3px; }
+  .person-card {
+    border: 1px solid #1f2a44;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .person-card .nm { font-weight: 600; font-size: 14px; }
+  #cam-camera-status { font-family: ui-monospace, SF Mono, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<header class="app-header">
+  <h1>Track 3D — world frame (ADR 0048 + 0050)</h1>
+  <nav>
+    <a href="/">Live</a>
+    <a href="/admin">Admin</a>
+    <a href="/track">Track</a>
+    <a href="/track3d" class="active">Track 3D</a>
+  </nav>
+</header>
+<main>
+  <div class="panel">
+    <div class="row">
+      <label>Camera: <select id="t3d-device-select"></select></label>
+      <label>Resolution:
+        <select id="t3d-resolution">
+          <option>640x480</option>
+          <option selected>1280x720</option>
+          <option>1920x1080</option>
+        </select>
+      </label>
+      <label>FPS:
+        <select id="t3d-fps">
+          <option>5</option>
+          <option selected>10</option>
+          <option>15</option>
+        </select>
+      </label>
+      <button id="t3d-start" class="primary">Start camera</button>
+      <button id="t3d-stop" disabled>Stop</button>
+      <span class="spacer"></span>
+      <span id="t3d-status" class="status-pill">idle</span>
+      <span id="t3d-fps-actual" class="muted"></span>
+    </div>
+    <div id="t3d-banner" class="muted" style="margin-top: 6px; font-size: 13px;"></div>
+  </div>
+
+  <div class="t3d-grid">
+    <div>
+      <div id="t3d-canvas-wrap">
+        <div id="t3d-overlay">drag = orbit · scroll = zoom · right-drag = pan</div>
+      </div>
+      <details class="panel" style="margin-top: 12px;">
+        <summary>What this view shows</summary>
+        <div style="margin-top:8px; font-size:13px; line-height:1.55;">
+          The grey rectangle is the floor — the same one the four corner
+          markers were placed on (per ADR 0012). Each detected marker is
+          drawn at its world-frame XYZ in metres, with an arrow showing yaw.
+          When two markers belong to the same person (ADR 0049: chest+back
+          or hat+chest), they fuse into one body avatar; the arrow then comes
+          from the chest↔back vector — a much more reliable yaw signal than
+          a single marker that may have rotated on the head. The teal wedge
+          marks where the camera is in world coordinates.
+        </div>
+      </details>
+    </div>
+    <aside>
+      <div class="panel">
+        <h3 style="margin-top:0;">Camera</h3>
+        <div id="cam-camera-status" class="muted">Loading…</div>
+      </div>
+      <div class="panel">
+        <h3 style="margin-top:0;">People in view</h3>
+        <div id="t3d-people-list" class="muted">Nothing detected.</div>
+      </div>
+      <div class="panel">
+        <h3 style="margin-top:0;">Legend</h3>
+        <div class="t3d-legend">
+          <div class="swatch" style="background:#22c55e;"></div><div>Detected marker (low reproj err)</div>
+          <div class="swatch" style="background:#f59e0b;"></div><div>Detected marker (med err)</div>
+          <div class="swatch" style="background:#ef4444;"></div><div>Detected marker (poor err)</div>
+          <div class="swatch" style="background:#60a5fa;"></div><div>Person centroid (fused)</div>
+          <div class="swatch" style="background:#0ea5e9;"></div><div>Camera position</div>
+          <div class="swatch" style="background:#7c3aed;"></div><div>Floor rect</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</main>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="/static/track3d/main.js"></script>
+</body>
+</html>

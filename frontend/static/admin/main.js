@@ -7,12 +7,14 @@ import { initPeople, loadPeople } from "./people.js";
 import { initMarkers, loadMarkers } from "./markers.js";
 import { initZones, loadZones } from "./zones.js";
 import { initQuestions, loadQuestions } from "./questions.js";
+import { initCameras, loadCameras } from "./cameras.js";
 
 const TABS = {
   people:    { load: loadPeople },
   markers:   { load: loadMarkers },
   zones:     { load: loadZones },
   questions: { load: loadQuestions },
+  cameras:   { load: loadCameras },
 };
 
 const tabBtns = document.querySelectorAll(".tabs button");
@@ -37,4 +39,5 @@ initPeople();
 initMarkers();
 initZones();
 initQuestions();
+initCameras();
 loadPeople();

@@ -28,11 +28,32 @@ function render() {
   }
 }
 
+const PLACEMENTS = ["hat", "chest", "back", "wrist", "accessory"];
+
 function makeCard(m) {
   const card = el("div", { class: "marker-card" });
   card.appendChild(el("img", { src: `/api/markers/${m.aruco_id}/image`, alt: "marker " + m.aruco_id }));
   card.appendChild(el("div", { class: "id" }, "#" + m.aruco_id));
   card.appendChild(el("div", { class: "person" }, m.person_name || "(unassigned)"));
+
+  // ADR 0049 — body placement chip, inline-editable.
+  const placementSel = el("select", { title: "Body placement (ADR 0049)" });
+  for (const p of PLACEMENTS) {
+    const opt = el("option", { value: p }, p);
+    if (p === (m.placement || "hat")) opt.setAttribute("selected", "selected");
+    placementSel.appendChild(opt);
+  }
+  placementSel.addEventListener("change", async () => {
+    try {
+      await api(`/api/markers/${m.aruco_id}/assign`, {
+        method: "PUT",
+        body: { person_id: m.person_id, placement: placementSel.value },
+      });
+      m.placement = placementSel.value;
+    } catch (e) { alert(e.message); }
+  });
+  card.appendChild(el("div", { class: "muted", style: { fontSize: "12px", marginTop: "4px" } },
+    "placement: ", placementSel));
 
   const actions = el("div", { class: "actions" });
   const cb = el("input", { type: "checkbox" });
@@ -229,8 +250,10 @@ export function initMarkers() {
   document.getElementById("batch-create-btn").addEventListener("click", async () => {
     const count = Number(document.getElementById("batch-count").value);
     if (!count || count < 1) return;
+    const placementEl = document.getElementById("batch-placement");
+    const placement = (placementEl && placementEl.value) || "hat";
     try {
-      await api("/api/markers/batch", { method: "POST", body: { count } });
+      await api("/api/markers/batch", { method: "POST", body: { count, placement } });
       await loadMarkers();
     } catch (e) { alert(e.message); }
   });

@@ -25,16 +25,19 @@ class MarkerOut(BaseModel):
     dictionary: str
     person_id: Optional[int] = None
     person_name: Optional[str] = None
+    placement: str = "hat"
     created_at: datetime
 
 
 class MarkerCreateBatch(BaseModel):
     count: int = Field(gt=0, le=500)
     person_id: Optional[int] = None
+    placement: str = "hat"
 
 
 class MarkerAssign(BaseModel):
     person_id: Optional[int] = None
+    placement: Optional[str] = None
 
 
 class ZoneIn(BaseModel):
@@ -125,3 +128,51 @@ class TrackingReport(BaseModel):
     pair_contact_seconds: list[dict]   # [{a, a_name, b, b_name, seconds}]
     never_met_pairs: list[dict]        # [{a, a_name, b, b_name}]
     per_person_contact_seconds: list[dict]  # [{aruco_id, person_name, seconds}]
+
+
+# ---------- ADR 0048 / 0012 — camera intrinsic + extrinsic ----------------
+
+class CameraOut(BaseModel):
+    id: int
+    name: str
+    marker_size_m: float
+    floor_rect_w_m: float
+    floor_rect_h_m: float
+    corner_ids: dict[str, int]
+    intrinsic_calibrated: bool
+    intrinsic_calibrated_at: Optional[datetime] = None
+    intrinsic_reproj_error_px: Optional[float] = None
+    intrinsic_image_w: Optional[int] = None
+    intrinsic_image_h: Optional[int] = None
+    extrinsic_calibrated: bool
+    extrinsic_calibrated_at: Optional[datetime] = None
+    extrinsic_reproj_error_px: Optional[float] = None
+    K: Optional[list[list[float]]] = None
+    dist: Optional[list[float]] = None
+    R_world_to_camera: Optional[list[list[float]]] = None
+    t_world_to_camera: Optional[list[float]] = None
+    camera_position_world_m: Optional[list[float]] = None
+    created_at: datetime
+
+
+class CameraSettingsIn(BaseModel):
+    """Operator-editable settings on a Camera row."""
+    name: Optional[str] = None
+    marker_size_m: Optional[float] = Field(default=None, gt=0.005, le=2.0)
+    floor_rect_w_m: Optional[float] = Field(default=None, gt=0.1, le=50.0)
+    floor_rect_h_m: Optional[float] = Field(default=None, gt=0.1, le=50.0)
+    corner_ids: Optional[dict[str, int]] = None  # keys: tl/tr/br/bl
+
+
+class CalibrationStatus(BaseModel):
+    session_id: str
+    camera_id: int
+    views_accepted: int
+    views_required: int
+    ready: bool
+    message: str
+
+
+class ExtrinsicAutoIn(BaseModel):
+    """Currently-detected pixel centers for the four floor-corner markers."""
+    corners: dict[str, list[float]]  # {'tl': [px, py], ...}
