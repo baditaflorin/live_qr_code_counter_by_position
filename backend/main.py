@@ -32,6 +32,7 @@ from . import (
     marker_tracker as tracker_mod,
     markers as marker_gen,
     observability as obs,
+    participant as participant_mod,
     pose as pose_mod,
     pose_filter as pose_filter_mod,
     rtsp_worker as rtsp_mod,
@@ -41,12 +42,14 @@ from . import (
     tracking as tracking_mod,
 )
 from .db import (
-    AuditLog, Camera, ControlMarker, Marker, Metric, Person, Question, SceneRecording,
-    SessionLocal, TrackingSample, TrackingSession, Vote, Zone, get_db, init_db,
+    AuditLog, Camera, ControlMarker, Marker, Metric, ParticipantCard, ParticipantEvent,
+    Person, Question, SceneRecording, SessionLocal, TrackingSample, TrackingSession,
+    Vote, Zone, get_db, init_db,
 )
 from .schemas import (
     CalibrationStatus, CameraOut, CameraSettingsIn, ExtrinsicAutoIn,
-    MarkerAssign, MarkerCreateBatch, MarkerOut, PersonIn, PersonOut, QuestionBulkIn,
+    MarkerAssign, MarkerCreateBatch, MarkerOut, ParticipantCardIn, ParticipantCardOut,
+    ParticipantCardPatch, ParticipantEventOut, PersonIn, PersonOut, QuestionBulkIn,
     QuestionIn, QuestionOut, TrackingSessionIn, TrackingSessionOut, VoteOut,
     ZoneIn, ZoneOut, ZonePatch,
 )
@@ -95,6 +98,19 @@ def _seed_control_on_boot() -> None:
     finally:
         db.close()
 _seed_control_on_boot()
+
+
+# Seed orientation participant cards from legacy ORIENTATION_ROUTER_* env vars
+# (ADR 0073 graduation). Idempotent — only inserts rows whose aruco_id doesn't
+# already exist. Then prime the in-memory router cache.
+def _seed_participant_on_boot() -> None:
+    db = SessionLocal()
+    try:
+        participant_mod.seed_orientation_cards_from_env(db)
+    finally:
+        db.close()
+    participant_mod.router.reload_cards()
+_seed_participant_on_boot()
 
 
 # ---------- helpers ----------
@@ -312,6 +328,119 @@ def control_markers_pdf(db: Session = Depends(get_db)):
         media_type="application/pdf",
         headers={"Content-Disposition": 'attachment; filename="control-cards.pdf"'},
     )
+
+
+# ---------- participant cards (ADR 0021 + 0022 + 0073) -----------------
+
+def _participant_card_to_out(c: ParticipantCard) -> ParticipantCardOut:
+    return ParticipantCardOut(
+        aruco_id=c.aruco_id,
+        name=c.name,
+        kit=c.kit,
+        action=c.action,
+        fire_model=c.fire_model,
+        params=c.params(),
+        enabled=bool(c.enabled),
+        created_at=c.created_at,
+    )
+
+
+def _validate_fire_model(fm: str) -> None:
+    if fm not in participant_mod.KNOWN_FIRE_MODELS:
+        raise HTTPException(
+            400, f"fire_model must be one of {participant_mod.KNOWN_FIRE_MODELS}; got {fm!r}",
+        )
+
+
+@app.get("/api/participant-cards")
+def list_participant_cards(db: Session = Depends(get_db)):
+    rows = db.execute(select(ParticipantCard).order_by(ParticipantCard.aruco_id)).scalars().all()
+    return {
+        "known_fire_models": list(participant_mod.KNOWN_FIRE_MODELS),
+        "known_kits": list(participant_mod.KNOWN_KITS),
+        "cards": [_participant_card_to_out(c) for c in rows],
+    }
+
+
+@app.post("/api/participant-cards", response_model=ParticipantCardOut)
+def create_participant_card(payload: ParticipantCardIn, db: Session = Depends(get_db)):
+    _validate_fire_model(payload.fire_model)
+    if db.get(ParticipantCard, payload.aruco_id) is not None:
+        raise HTTPException(409, f"Card with aruco_id={payload.aruco_id} already exists")
+    card = ParticipantCard(
+        aruco_id=payload.aruco_id,
+        name=payload.name,
+        kit=payload.kit,
+        action=payload.action,
+        fire_model=payload.fire_model,
+        params_json=json.dumps(payload.params) if payload.params is not None else None,
+        enabled=1 if payload.enabled else 0,
+    )
+    db.add(card)
+    db.commit()
+    participant_mod.router.reload_cards()
+    return _participant_card_to_out(card)
+
+
+@app.patch("/api/participant-cards/{aruco_id}", response_model=ParticipantCardOut)
+def patch_participant_card(aruco_id: int, payload: ParticipantCardPatch, db: Session = Depends(get_db)):
+    card = db.get(ParticipantCard, aruco_id)
+    if card is None:
+        raise HTTPException(404, "Participant card not found")
+    if payload.fire_model is not None:
+        _validate_fire_model(payload.fire_model)
+        card.fire_model = payload.fire_model
+    if payload.name is not None:
+        card.name = payload.name
+    if payload.kit is not None:
+        card.kit = payload.kit
+    if payload.action is not None:
+        card.action = payload.action
+    if payload.params is not None:
+        card.params_json = json.dumps(payload.params)
+    if payload.enabled is not None:
+        card.enabled = 1 if payload.enabled else 0
+    db.commit()
+    participant_mod.router.reload_cards()
+    return _participant_card_to_out(card)
+
+
+@app.delete("/api/participant-cards/{aruco_id}")
+def delete_participant_card(aruco_id: int, db: Session = Depends(get_db)):
+    card = db.get(ParticipantCard, aruco_id)
+    if card is None:
+        raise HTTPException(404, "Participant card not found")
+    db.delete(card)
+    db.commit()
+    participant_mod.router.reload_cards()
+    return {"ok": True}
+
+
+@app.get("/api/participant-events")
+def list_participant_events(
+    limit: int = Query(100, ge=1, le=1000),
+    aruco_id: Optional[int] = None,
+    kit: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Recent fire events — most recent first. ADR 0021 audit trail."""
+    stmt = select(ParticipantEvent).order_by(ParticipantEvent.t.desc()).limit(limit)
+    if aruco_id is not None:
+        stmt = stmt.where(ParticipantEvent.marker_aruco_id == aruco_id)
+    if kit is not None:
+        stmt = stmt.where(ParticipantEvent.kit == kit)
+    rows = db.execute(stmt).scalars().all()
+    return {
+        "events": [
+            ParticipantEventOut(
+                id=r.id, t=r.t, marker_aruco_id=r.marker_aruco_id,
+                held_by_aruco_id=r.held_by_aruco_id, kit=r.kit, action=r.action,
+                fire_model=r.fire_model, kind=r.kind, value=r.value,
+                attribution_confidence=r.attribution_confidence,
+            )
+            for r in rows
+        ],
+    }
 
 
 # ---------- CSV roster import ----------
@@ -2068,9 +2197,17 @@ async def ws_detect(ws: WebSocket):
                               resolution=f"{w}x{h}")
             obs.record_metric("detection.markers_seen", len(results))
 
-            # Split detections into person vs control.
-            person_results = [d for d in results if not control_mod.is_control_id(d.aruco_id)]
+            # Split detections into person vs control vs participant card.
+            participant_card_lookup = participant_mod.router.card_ids()
+            person_results = [
+                d for d in results
+                if not control_mod.is_control_id(d.aruco_id)
+                and d.aruco_id not in participant_card_lookup
+            ]
             control_ids = {d.aruco_id for d in results if control_mod.is_control_id(d.aruco_id)}
+            participant_card_ids_seen = {
+                d.aruco_id for d in results if d.aruco_id in participant_card_lookup
+            }
 
             # Run the command router; fire actions for any cards held still long enough.
             fired_now = control_mod.router.update(control_ids, now)
@@ -2098,13 +2235,20 @@ async def ws_detect(ws: WebSocket):
 
             marker_meta = _marker_meta_for(set(d.aruco_id for d in person_results))
 
+            # Participant cards (ADR 0021) need pose estimation too — the
+            # orientation fire model (ADR 0073) reads world-frame yaw. Build
+            # a unified pose-input list of person markers + card markers.
+            participant_card_results = [
+                d for d in results if d.aruco_id in participant_card_lookup
+            ]
+            pose_inputs = person_results + participant_card_results
+
             # ADR 0048 — pose estimation with IPPE flip resolution + per-marker
-            # temporal smoothing (pose_filter.py). Only person_results — control
-            # markers don't need 3D pose.
+            # temporal smoothing (pose_filter.py). Control markers don't need 3D pose.
             poses: dict[int, detection.PoseDetection] = {}
             if cached_camera and cached_camera.get("K") is not None:
                 poses = detection.estimate_pose(
-                    person_results,
+                    pose_inputs,
                     np.array(cached_camera["K"], dtype=np.float64),
                     np.array(cached_camera["dist"], dtype=np.float64),
                     cached_camera["marker_size_m"],
@@ -2113,7 +2257,7 @@ async def ws_detect(ws: WebSocket):
                 )
             # Drop filter state for markers that disappeared — keeps the dict
             # bounded and lets a marker that genuinely re-enters reset cleanly.
-            seen_ids = {d.aruco_id for d in person_results}
+            seen_ids = {d.aruco_id for d in pose_inputs}
             for stale in [k for k in pose_filters if k not in seen_ids
                           and (now - (pose_filters[k]._state.last_ts if pose_filters[k]._state else 0)) > 2.0]:
                 pose_filters.pop(stale, None)
@@ -2122,16 +2266,63 @@ async def ws_detect(ws: WebSocket):
             scene_payload: Optional[dict] = None
             extrinsic: Optional[pose_mod.Extrinsic] = None
             marker_obs: list[scene_mod.MarkerObservation] = []
+            person_marker_obs: list[scene_mod.MarkerObservation] = []
+            participant_events: list[dict] = []
             if cached_camera and cached_camera.get("R") is not None and poses:
                 extrinsic = pose_mod.Extrinsic(
                     R=np.array(cached_camera["R"], dtype=np.float64),
                     t=np.array(cached_camera["t"], dtype=np.float64),
                 )
                 marker_obs = scene_mod.build_marker_observations(
-                    person_results, poses, extrinsic, marker_meta
+                    pose_inputs, poses, extrinsic, marker_meta
                 )
-                people = scene_mod.fuse_person_observations(marker_obs)
-                coverage = round(100.0 * len(poses) / max(1, len(person_results)), 1)
+                # Person fusion + scene_world output excludes participant cards
+                # (a card on the floor isn't a person to fuse).
+                person_marker_obs = [
+                    m for m in marker_obs if m.aruco_id not in participant_card_lookup
+                ]
+                people = scene_mod.fuse_person_observations(person_marker_obs)
+
+                # ADR 0021 + 0022 + 0073 — participant routing. Cards loaded
+                # from the participant_cards table; orientation cards delegate
+                # angle bucketing to backend/orientation.py.
+                if participant_mod.router.enabled and participant_card_ids_seen:
+                    obs_by_id: dict[int, participant_mod._MarkerObsLike] = {
+                        m.aruco_id: participant_mod._MarkerObsLike(
+                            world_xyz=m.world_xyz,
+                            yaw_deg=m.yaw_deg, pitch_deg=m.pitch_deg, roll_deg=m.roll_deg,
+                            reproj_error_px=m.reproj_error_px,
+                        )
+                        for m in marker_obs
+                    }
+                    candidate_holders = [
+                        (m.aruco_id, m.world_xyz) for m in person_marker_obs
+                    ]
+                    fired = participant_mod.router.update(
+                        seen_card_ids=participant_card_ids_seen,
+                        marker_obs_by_id=obs_by_id,
+                        candidate_holder_xyz=candidate_holders,
+                        now=now,
+                    )
+                    if fired:
+                        # Best-effort persistence — failures shouldn't break
+                        # the WS frame loop.
+                        try:
+                            participant_mod.persist_events(fired)
+                        except Exception:  # noqa: BLE001
+                            obs.logger.exception("participant event persist failed")
+                        for ev in fired:
+                            participant_events.append(ev.to_payload())
+                            obs.record_metric(
+                                "participant.fire", 1.0,
+                                aruco_id=ev.aruco_id,
+                                kit=ev.kit,
+                                fire_model=ev.fire_model,
+                                kind=ev.kind,
+                                value=ev.value or "",
+                            )
+
+                coverage = round(100.0 * len(poses) / max(1, len(pose_inputs)), 1)
                 scene_payload = {
                     "world_frame": {
                         "floor_w_m": cached_camera["floor_w_m"],
@@ -2165,10 +2356,13 @@ async def ws_detect(ws: WebSocket):
             for d in results:
                 if d.aruco_id in corner_lookup:
                     corner_centers_px[corner_lookup[d.aruco_id]] = list(d.center)
-            for d in person_results:
+            for d in pose_inputs:
                 cx, cy = d.center
                 center_norm = (cx / w, cy / h)
-                zid = detection.assign_zone(center_norm, zones_norm)
+                is_card = d.aruco_id in participant_card_lookup
+                # Cards don't participate in the standing-on-a-side zone tally;
+                # only person markers do.
+                zid = None if is_card else detection.assign_zone(center_norm, zones_norm)
                 if zid is not None:
                     zone_counts[zid] = zone_counts.get(zid, 0) + 1
                 # corner_centers_px was populated above by the all-detections scan.
@@ -2181,7 +2375,15 @@ async def ws_detect(ws: WebSocket):
                     "zone_label": zone_label_lookup.get(zid),
                     "person_name": marker_meta.get(d.aruco_id, {}).get("person_name"),
                     "placement": marker_meta.get(d.aruco_id, {}).get("placement", "hat"),
+                    "is_participant_card": is_card,
                 }
+                if is_card:
+                    card_cfg = participant_mod.router.get_card(d.aruco_id)
+                    if card_cfg is not None:
+                        entry["card_kit"] = card_cfg.kit
+                        entry["card_name"] = card_cfg.name
+                        entry["card_action"] = card_cfg.action
+                        entry["card_fire_model"] = card_cfg.fire_model
                 p = poses.get(d.aruco_id)
                 if p is not None and extrinsic is not None:
                     xyz_w, R_w = pose_mod.marker_pose_world(p.rvec, p.tvec, extrinsic)
@@ -2278,6 +2480,7 @@ async def ws_detect(ws: WebSocket):
                 "scene_world": scene_payload,
                 "calibration_hint": calibration_hint,
                 "control_events": control_events,
+                "participant_events": participant_events,
                 "drift_events": drift_events,
             }
             await ws.send_json(payload)

@@ -104,6 +104,7 @@ the kit is what gives them a voice the system can hear.
 | [0028](0028-memory-cards.md)                   | Memory cards — participant-bookmarked moments           | 0021, 0019 |
 | [0029](0029-promise-cards.md)                  | Promise cards — the closing commitment ritual           | 0017, 0020 |
 | [0030](0030-custom-card-decks.md)              | Custom decks per workshop — the kit as instrument       | 0010, 0021–0029 |
+| [0073](0073-orientation-as-semantic-channel.md) | Rotation as a value channel; 1 card carries N values (graduated from experimental) | 0022, 0023, 0048 |
 
 ### Grammar layer — *abandoned, kept as history*
 

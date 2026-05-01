@@ -136,6 +136,57 @@ class ControlMarker(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ParticipantCard(Base):
+    """Participant cards — IDs reserved for the *room's* voice (ADR 0021).
+
+    Distinct from ControlMarker (operator-only): a participant card is picked
+    up off a communal table, raised by anyone, and routed through the
+    `ParticipantRouter` (ADR 0022) instead of the `CommandRouter`.
+
+    `fire_model` (ADR 0022) is elevated to a column because routing does a
+    per-frame filter on it; the rest of the per-card configuration lives in
+    `params_json` (e.g. orientation buckets per ADR 0073).
+    """
+    __tablename__ = "participant_cards"
+    aruco_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    kit: Mapped[str] = mapped_column(String(40), nullable=False, default="reaction", index=True)
+    action: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    fire_model: Mapped[str] = mapped_column(String(20), nullable=False, default="pulse", index=True)
+    params_json: Mapped[Optional[str]] = mapped_column(Text)
+    enabled: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def params(self) -> dict:
+        if not self.params_json:
+            return {}
+        try:
+            v = json.loads(self.params_json)
+        except json.JSONDecodeError:
+            return {}
+        return v if isinstance(v, dict) else {}
+
+
+class ParticipantEvent(Base):
+    """One row per participant-card activation / level-tick / orientation fire
+    (ADR 0021's "every emergent action has a row" promise).
+
+    `value` carries the orientation-bucket symbol (ADR 0073) for orientation
+    cards, the gesture name for gesture cards, etc. NULL for plain pulse fires.
+    """
+    __tablename__ = "participant_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    t: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    marker_aruco_id: Mapped[int] = mapped_column(Integer, index=True)
+    held_by_aruco_id: Mapped[Optional[int]] = mapped_column(Integer)  # ADR 0022 holder attribution
+    kit: Mapped[str] = mapped_column(String(40), index=True)
+    action: Mapped[str] = mapped_column(String(80), default="")
+    fire_model: Mapped[str] = mapped_column(String(20), default="pulse")
+    kind: Mapped[str] = mapped_column(String(40))  # "pulse_on" | "pulse_off" | "orientation_enter" | ...
+    value: Mapped[Optional[str]] = mapped_column(String(80))
+    attribution_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+
+
 class TrackingSession(Base):
     """A 'who-was-where, with whom, for how long' recording window.
 
