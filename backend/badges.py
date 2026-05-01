@@ -520,12 +520,19 @@ def _motif_heraldic_scroll(canvas: Image.Image, opts: BadgeOptions, palette: Pal
         draw.line([(band_x0 + x_pad, band_y + band_h - y_pad), (band_x1 - x_pad, band_y + band_h - y_pad)],
                   fill=palette.accent, width=1)
 
-    # Name on the ribbon, paper-coloured, prominent.
+    # Name on the ribbon — auto-shrink so long names fit without clipping.
     if name:
-        font = _load_font(int(band_h * 0.55))
-        line = name if len(name) < 26 else name[:25] + "…"
+        font_px = int(band_h * 0.55)
+        target_w = (band_x1 - band_x0) - 60  # leave inner padding
+        line = name if len(name) < 32 else name[:31] + "…"
+        font = _load_font(font_px)
         bbox = draw.textbbox((0, 0), line, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        while tw > target_w and font_px > 16:
+            font_px -= 3
+            font = _load_font(font_px)
+            bbox = draw.textbbox((0, 0), line, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
         ty = band_y + (band_h - th) // 2 - 4
         draw.text((cx_m - tw / 2, ty), line, fill=palette.paper, font=font)
 
@@ -809,10 +816,11 @@ TEMPLATE_LAYOUTS: dict[str, dict] = {
         "marker_rotation_deg": 0,
         "bg_pattern": "parchment",
         "motif": "postage_perforation",
-        "name_pos_frac": (0.5, 0.70),
+        # Motif draws the name + denomination — layout shouldn't duplicate them.
+        "name_pos_frac": None,
         "name_anchor": "center",
-        "name_size_frac": 0.068,
-        "id_pos_frac": (0.5, 0.82),
+        "name_size_frac": 0,
+        "id_pos_frac": None,
         "border": "none",
     },
     # Inverted color scheme — badge is ink-color all over, marker sits in a
