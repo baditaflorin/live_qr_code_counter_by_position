@@ -151,9 +151,9 @@ h1{font-size:18px;margin:0 0 16px}
 </style></head>
 <body><form method="post" action="/login">
 <h1>Sign in</h1>
-{err}
+__ERR__
 <input name="token" type="password" placeholder="APP_TOKEN" autofocus required />
-<input name="next" type="hidden" value="{next}" />
+<input name="next" type="hidden" value="__NEXT__" />
 <button type="submit">Sign in</button>
 </form></body></html>
 """
@@ -161,7 +161,11 @@ h1{font-size:18px;margin:0 0 16px}
 
 def login_page(error: Optional[str] = None, next_path: str = "/admin") -> HTMLResponse:
     err = f'<div class="err">{error}</div>' if error else ""
-    html = LOGIN_PAGE_HTML.format(err=err, next=next_path)
+    # str.replace, not str.format — the template's CSS uses { } braces, and
+    # .format() would treat every selector body as a placeholder.
+    html = (LOGIN_PAGE_HTML
+            .replace("__ERR__", err)
+            .replace("__NEXT__", next_path))
     return HTMLResponse(html)
 
 
