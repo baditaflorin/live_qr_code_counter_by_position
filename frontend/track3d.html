@@ -50,7 +50,7 @@
 </head>
 <body>
 <header class="app-header">
-  <h1>Track 3D — world frame (ADR 0048 + 0050)</h1>
+  <h1>Track 3D — world frame</h1>
   <nav>
     <a href="/">Live</a>
     <a href="/admin">Admin</a>
@@ -82,7 +82,22 @@
       <span id="t3d-status" class="status-pill">idle</span>
       <span id="t3d-fps-actual" class="muted"></span>
     </div>
-    <div id="t3d-banner" class="muted" style="margin-top: 6px; font-size: 13px;"></div>
+    <div id="t3d-banner" style="margin-top: 6px; font-size: 13px;"></div>
+  </div>
+
+  <!-- Setup guide — hidden once both calibrations are done -->
+  <div class="panel" id="t3d-setup-guide" style="border-left: 4px solid var(--accent);">
+    <h3 style="margin-top:0;">Before you can see the 3D world — 2 one-time steps</h3>
+    <ol style="margin: 0 0 10px 0; padding-left: 20px; line-height: 2;">
+      <li id="setup-step-1">
+        <strong>Intrinsic calibration</strong> — print the ChArUco board, wave it in front of the camera from different angles.
+      </li>
+      <li id="setup-step-2">
+        <strong>Extrinsic calibration</strong> — tape 4 marker cards to the floor corners of your space.
+      </li>
+    </ol>
+    <a href="/admin#cameras"><button class="primary">Open Admin → Cameras to calibrate</button></a>
+    <span class="muted" style="font-size:12px; margin-left: 10px;">Once both steps are done, come back here and press <strong>Start camera</strong>.</span>
   </div>
 
   <div class="t3d-grid">
@@ -130,8 +145,8 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+    "three": "/static/lib/three/three.module.js",
+    "three/addons/": "/static/lib/three/addons/"
   }
 }
 </script>
