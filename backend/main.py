@@ -28,6 +28,7 @@ from . import (
     control as control_mod,
     detection,
     drift as drift_mod,
+    interactions as interactions_mod,
     marker_tracker as tracker_mod,
     markers as marker_gen,
     observability as obs,
@@ -2210,13 +2211,35 @@ async def ws_scene(ws: WebSocket):
     """
     await ws.accept()
     aggregator = scene_state_mod.get_aggregator()
-    last_version_sent = -1
+    interactions = interactions_mod.get_tracker()
     try:
         while True:
             v = aggregator.version
             scene = await aggregator.fused_scene()
+            now = time.time()
+            new_events = interactions.update(scene.get("people", []), now)
+            scene["encounters"] = {
+                "live": [
+                    {
+                        "a_id": e.a_id, "b_id": e.b_id,
+                        "a_name": e.a_name, "b_name": e.b_name,
+                        "started_at": e.started_at,
+                        "duration_s": round(now - e.started_at, 1),
+                    }
+                    for e in interactions.live_encounters(now)
+                ],
+                "events_now": [
+                    {
+                        "kind": e.kind, "a_id": e.a_id, "b_id": e.b_id,
+                        "a_name": e.a_name, "b_name": e.b_name,
+                        "duration_s": e.duration_s,
+                    }
+                    for e in new_events
+                ],
+                "radius_m": interactions.radius_m,
+                "min_dwell_s": interactions.min_dwell_s,
+            }
             await ws.send_json({"ok": True, "scene_world": scene, "version": v})
-            last_version_sent = v
             # 10 Hz cadence is enough for a smooth 3D view; keeps payload size
             # well under 16 KB even with ~30 markers and ~10 people.
             await asyncio.sleep(0.1)
