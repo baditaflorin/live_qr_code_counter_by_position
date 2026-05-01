@@ -61,26 +61,12 @@
 <main>
   <div class="panel">
     <div class="row">
-      <label>Camera: <select id="t3d-device-select"></select></label>
-      <label>Resolution:
-        <select id="t3d-resolution">
-          <option>640x480</option>
-          <option selected>1280x720</option>
-          <option>1920x1080</option>
-        </select>
-      </label>
-      <label>FPS:
-        <select id="t3d-fps">
-          <option>5</option>
-          <option selected>10</option>
-          <option>15</option>
-        </select>
-      </label>
-      <button id="t3d-start" class="primary">Start camera</button>
-      <button id="t3d-stop" disabled>Stop</button>
+      <span class="muted" style="font-size:13px;">
+        Observer view — fused live scene from every camera publishing to <code>/ws/detect</code>.
+        To publish frames, open <a href="/" target="_blank">/</a> on a device with a webcam.
+      </span>
       <span class="spacer"></span>
-      <span id="t3d-status" class="status-pill">idle</span>
-      <span id="t3d-fps-actual" class="muted"></span>
+      <span id="t3d-status" class="status-pill">connecting…</span>
     </div>
     <div id="t3d-banner" style="margin-top: 6px; font-size: 13px;"></div>
   </div>
@@ -121,8 +107,8 @@
     </div>
     <aside>
       <div class="panel">
-        <h3 style="margin-top:0;">Camera</h3>
-        <div id="cam-camera-status" class="muted">Loading…</div>
+        <h3 style="margin-top:0;">Publishing cameras</h3>
+        <div id="t3d-cameras-list" class="muted">No cameras publishing.</div>
       </div>
       <div class="panel">
         <h3 style="margin-top:0;">People in view</h3>
@@ -131,12 +117,20 @@
       <div class="panel">
         <h3 style="margin-top:0;">Legend</h3>
         <div class="t3d-legend">
-          <div class="swatch" style="background:#22c55e;"></div><div>Detected marker (low reproj err)</div>
-          <div class="swatch" style="background:#f59e0b;"></div><div>Detected marker (med err)</div>
-          <div class="swatch" style="background:#ef4444;"></div><div>Detected marker (poor err)</div>
-          <div class="swatch" style="background:#60a5fa;"></div><div>Person centroid (fused)</div>
+          <div class="swatch" style="background:#22c55e;"></div><div>Marker (low reproj err)</div>
+          <div class="swatch" style="background:#f59e0b;"></div><div>Marker (medium err)</div>
+          <div class="swatch" style="background:#ef4444;"></div><div>Marker (poor err)</div>
+          <div class="swatch" style="background:#ff4d4d;"></div><div>Marker +X axis (yaw arrow)</div>
+          <div class="swatch" style="background:#4dff7a;"></div><div>Marker +Y axis</div>
+          <div class="swatch" style="background:#4d9bff;"></div><div>Marker +Z axis (out of face)</div>
+          <div class="swatch" style="background:#60a5fa;"></div><div>Person (chest+back fused)</div>
           <div class="swatch" style="background:#0ea5e9;"></div><div>Camera position</div>
-          <div class="swatch" style="background:#7c3aed;"></div><div>Floor rect</div>
+          <div class="swatch" style="background:#7c3aed;"></div><div>Floor rectangle</div>
+        </div>
+        <div class="muted" style="font-size:11px; margin-top:8px; line-height:1.5;">
+          The 3-axis gizmo on each marker rotates with the full 6-DOF pose
+          (yaw + pitch + roll) — flips and tilts are visible directly.
+          A small "<strong>2×</strong>" label means two cameras agree on that marker.
         </div>
       </div>
     </aside>
