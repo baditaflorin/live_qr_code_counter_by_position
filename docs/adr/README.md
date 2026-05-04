@@ -58,6 +58,8 @@ stranger reads on a Saturday morning and runs their first workshop on Tuesday.
 | [0006](0006-presenter-mode.md)                 | Presenter mode at `/present`                            | —          |
 | [0007](0007-csv-roster-import.md)              | CSV roster import + bulk marker assignment              | —          |
 | [0008](0008-tracking-timeline-replay.md)       | Tracking-session timeline replay UI                     | —          |
+| [0074](0074-track3d-floor-aware-framing.md)    | Track3D floor-aware camera framing                      | 0050       |
+| [0075](0075-track3d-operator-onboarding.md)    | Track3D operator onboarding and empty states            | 0060, 0074 |
 
 ## Control markers — the room as the interface
 
