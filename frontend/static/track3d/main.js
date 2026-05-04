@@ -25,6 +25,10 @@ const peopleList    = document.getElementById("t3d-people-list");
 const camerasList   = document.getElementById("t3d-cameras-list");
 const encountersList = document.getElementById("t3d-encounters-list");
 const statusEl      = document.getElementById("t3d-status");
+const sceneStatsEl  = document.getElementById("t3d-scene-stats");
+const emptyStateEl  = document.getElementById("t3d-empty-state");
+const emptyTitleEl  = document.getElementById("t3d-empty-title");
+const emptyBodyEl   = document.getElementById("t3d-empty-body");
 const optTrails     = document.getElementById("opt-trails");
 const optHeatmap    = document.getElementById("opt-heatmap");
 const optClear      = document.getElementById("opt-clear-history");
@@ -51,6 +55,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.target.set(2.5, 2.0, 0);
+controls.screenSpacePanning = true;
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -68,6 +73,16 @@ const personMeshes = new Map();    // person_id -> Group
 const personTrails = new Map();    // person_id -> { line, positions[], colors }
 const TRAIL_MAX_POINTS = 300;      // ~30 s at 10 Hz; past that, drop oldest
 
+const DEFAULT_VIEW_DIR = new THREE.Vector3(1, -1, 0.72).normalize();
+const TOP_DOWN_VIEW_DIR = new THREE.Vector3(0, -0.002, 1).normalize();
+let didAutoFrameWorld = false;
+let userCameraOverride = false;
+let latestWorld = null;
+
+controls.addEventListener("start", () => {
+  userCameraOverride = true;
+});
+
 // Heatmap accumulator: 20 cm grid cells, dwell time per cell.
 const HEAT_CELL_M = 0.2;
 const heatGrid = new Map();        // "x,y" -> seconds dwelt
@@ -78,6 +93,7 @@ function ensureFloor(w, h) {
   if (floorMesh && floorMesh.userData.w === w && floorMesh.userData.h === h) return;
   if (floorMesh) { scene.remove(floorMesh); floorMesh.geometry.dispose(); floorMesh.material.dispose(); }
   if (floorGrid) { scene.remove(floorGrid); floorGrid.geometry.dispose(); floorGrid.material.dispose(); }
+  didAutoFrameWorld = false;
 
   const geom = new THREE.PlaneGeometry(w, h);
   const mat = new THREE.MeshStandardMaterial({
@@ -98,6 +114,99 @@ function ensureFloor(w, h) {
   scene.add(floorGrid);
 
   controls.target.set(w / 2, h / 2, 0);
+  controls.maxDistance = Math.max(20, Math.max(w, h) * 8);
+  controls.minDistance = 0.2;
+}
+
+function expandBoundsByObject(box, obj, radius = 0.25, height = 0.25) {
+  box.expandByPoint(new THREE.Vector3(obj.position.x - radius, obj.position.y - radius, obj.position.z));
+  box.expandByPoint(new THREE.Vector3(obj.position.x + radius, obj.position.y + radius, obj.position.z + height));
+}
+
+function buildWorldBounds({ includeFloor = true, includeEntities = true } = {}) {
+  const box = new THREE.Box3();
+  let hasPoint = false;
+  const addPoint = (v) => {
+    box.expandByPoint(v);
+    hasPoint = true;
+  };
+
+  if (includeFloor && floorMesh) {
+    const { w, h } = floorMesh.userData;
+    addPoint(new THREE.Vector3(0, 0, 0));
+    addPoint(new THREE.Vector3(w, 0, 0));
+    addPoint(new THREE.Vector3(w, h, 0));
+    addPoint(new THREE.Vector3(0, h, 0));
+  }
+
+  if (includeEntities) {
+    for (const mesh of markerMeshes.values()) {
+      expandBoundsByObject(box, mesh, 0.25, 0.35);
+      hasPoint = true;
+    }
+    for (const mesh of personMeshes.values()) {
+      expandBoundsByObject(box, mesh, 0.35, 2.05);
+      hasPoint = true;
+    }
+    for (const mesh of cameraMarkers.values()) {
+      expandBoundsByObject(box, mesh, 0.3, 0.5);
+      hasPoint = true;
+    }
+  }
+
+  if (!hasPoint) return null;
+  if (box.isEmpty()) box.expandByScalar(0.5);
+  return box;
+}
+
+function fitDistanceForBox(box, padding = 1.2) {
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const fovY = THREE.MathUtils.degToRad(camera.fov);
+  const aspect = Math.max(0.1, camera.aspect || 1);
+  const fovX = 2 * Math.atan(Math.tan(fovY / 2) * aspect);
+  const fitFov = Math.max(THREE.MathUtils.degToRad(12), Math.min(fovX, fovY));
+  return Math.max(2.0, (sphere.radius * padding) / Math.sin(fitFov / 2));
+}
+
+function currentViewDirection() {
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 0.001) return DEFAULT_VIEW_DIR.clone();
+  return dir.normalize();
+}
+
+function applyCameraView(pos, look, animate = true) {
+  camera.near = 0.02;
+  camera.far = Math.max(200, pos.distanceTo(look) * 5);
+  camera.updateProjectionMatrix();
+  if (animate) {
+    flyCameraTo(pos, look);
+  } else {
+    camera.position.copy(pos);
+    controls.target.copy(look);
+    cameraTargetPos = null;
+    cameraTargetLook = null;
+    controls.update();
+  }
+}
+
+function fitBoxToView(box, {
+  animate = true,
+  direction = null,
+  padding = 1.2,
+  targetZ = null,
+} = {}) {
+  const look = box.getCenter(new THREE.Vector3());
+  if (targetZ != null) look.z = targetZ;
+  const dir = (direction || currentViewDirection()).clone().normalize();
+  const dist = fitDistanceForBox(box, padding);
+  applyCameraView(look.clone().add(dir.multiplyScalar(dist)), look, animate);
+}
+
+function fitWorldToView({ animate = true, includeEntities = true, direction = null, padding = 1.22 } = {}) {
+  const box = buildWorldBounds({ includeFloor: true, includeEntities });
+  if (!box) return false;
+  fitBoxToView(box, { animate, direction, padding, targetZ: 0 });
+  return true;
 }
 
 function reproErrorColor(err) {
@@ -364,6 +473,7 @@ function applyEulerZYX(obj3d, yaw_deg, pitch_deg, roll_deg) {
 
 function updateScene(world) {
   if (!world || !world.world_frame) return;
+  latestWorld = world;
   ensureFloor(world.world_frame.floor_w_m, world.world_frame.floor_h_m);
 
   const activeCameraIds = new Set();
@@ -469,6 +579,18 @@ function updateScene(world) {
     }
   }
 
+  if (!didAutoFrameWorld && !userCameraOverride) {
+    didAutoFrameWorld = fitWorldToView({
+      animate: false,
+      includeEntities: true,
+      direction: DEFAULT_VIEW_DIR,
+      padding: 1.18,
+    });
+  }
+
+  renderSceneStats(world);
+  updateStageOverlay(world);
+  markSetupStep(setupStep3, !!(world.cameras || []).length, "Live", "Waiting");
   renderPeopleList(world);
   renderCamerasList(world.cameras || []);
   renderEncounters(world.encounters);
@@ -476,6 +598,54 @@ function updateScene(world) {
     optStatus.textContent =
       `${heatGrid.size} cells · ${[...personTrails.values()].reduce((a, t) => a + t.count, 0)} trail pts`;
   }
+}
+
+function renderSceneStats(world) {
+  if (!sceneStatsEl) return;
+  const cameras = world.cameras || [];
+  const people = world.people || [];
+  const markers = world.markers || [];
+  const markerCount = markers.length;
+  const coverageVals = cameras
+    .map((c) => Number(c.coverage_pct))
+    .filter((v) => Number.isFinite(v));
+  const coverage = coverageVals.length
+    ? Math.round(coverageVals.reduce((a, v) => a + v, 0) / coverageVals.length)
+    : 0;
+  sceneStatsEl.innerHTML = `
+    <div class="t3d-stat"><strong>${cameras.length}</strong><span>cameras</span></div>
+    <div class="t3d-stat"><strong>${people.length}</strong><span>people</span></div>
+    <div class="t3d-stat"><strong>${markerCount}</strong><span>markers</span></div>
+    <div class="t3d-stat"><strong>${coverage}%</strong><span>coverage</span></div>
+  `;
+}
+
+function updateStageOverlay(world) {
+  if (!emptyStateEl || replayId) return;
+  const cameras = world.cameras || [];
+  const markers = world.markers || [];
+  const people = world.people || [];
+  let title = "";
+  let body = "";
+
+  if (!cameras.length) {
+    title = "No publishing cameras";
+    body = "Open Live on a webcam device, start publishing, then this view will frame the calibrated floor.";
+  } else if (cameras.some((c) => !c.intrinsic_calibrated || !c.extrinsic_calibrated)) {
+    title = "Calibration incomplete";
+    body = "Finish camera calibration so marker positions can be projected into the shared floor frame.";
+  } else if (!markers.length && !people.length) {
+    title = "No markers detected";
+    body = "The cameras are connected. Bring a marker into view and the scene will stay centered on the floor.";
+  }
+
+  if (!title) {
+    emptyStateEl.style.display = "none";
+    return;
+  }
+  emptyTitleEl.textContent = title;
+  emptyBodyEl.textContent = body;
+  emptyStateEl.style.display = "flex";
 }
 
 function renderEncounters(enc) {
@@ -675,27 +845,38 @@ function openSceneWS() {
 const setupGuide = document.getElementById("t3d-setup-guide");
 const setupStep1 = document.getElementById("setup-step-1");
 const setupStep2 = document.getElementById("setup-step-2");
+const setupStep3 = document.getElementById("setup-step-3");
+
+function markSetupStep(el, done, doneLabel = "Done", todoLabel = "Needed") {
+  if (!el) return;
+  el.classList.toggle("is-done", done);
+  const badge = el.querySelector("[data-step-state]");
+  if (badge) badge.textContent = done ? doneLabel : todoLabel;
+}
 
 async function refreshCalibrationBanner() {
   try {
     const cams = await api("/api/cameras");
+    const livePublishing = !!(latestWorld?.cameras || []).length;
     if (!cams.length) {
       banner.innerHTML = `<a href="/admin#cameras">Open Admin → Cameras</a> to set up a camera.`;
+      markSetupStep(setupStep1, false);
+      markSetupStep(setupStep2, false);
+      markSetupStep(setupStep3, false, "Live", "Waiting");
+      if (setupGuide) setupGuide.hidden = false;
       return;
     }
     const allIntr = cams.every((c) => c.intrinsic_calibrated);
     const allExt  = cams.every((c) => c.extrinsic_calibrated);
-    if (allIntr && setupStep1) {
-      setupStep1.style.opacity = "0.5";
-      setupStep1.innerHTML = `<strong>Intrinsic calibration</strong> ✓`;
-    }
-    if (allExt && setupStep2) {
-      setupStep2.style.opacity = "0.5";
-      setupStep2.innerHTML = `<strong>Extrinsic calibration</strong> ✓`;
-    }
-    if (allIntr && allExt) {
+    markSetupStep(setupStep1, allIntr);
+    markSetupStep(setupStep2, allExt);
+    markSetupStep(setupStep3, livePublishing, "Live", "Waiting");
+    if (allIntr && allExt && livePublishing) {
       if (setupGuide) setupGuide.hidden = true;
       banner.textContent = "";
+    } else if (allIntr && allExt) {
+      if (setupGuide) setupGuide.hidden = false;
+      banner.innerHTML = `Calibration is ready. Open <a href="/" target="_blank">Live</a> on a webcam device and press <strong>Start</strong>.`;
     } else {
       if (setupGuide) setupGuide.hidden = false;
       banner.innerHTML = `Some cameras need calibration — open <a href="/admin#cameras">Admin → Cameras</a>.`;
@@ -729,45 +910,44 @@ function flyCameraTo(pos, look) {
 function viewReset() {
   followingEntityKey = null;
   if (viewFollowSel) viewFollowSel.value = "";
+  userCameraOverride = false;
+  if (fitWorldToView({
+    animate: true,
+    includeEntities: true,
+    direction: DEFAULT_VIEW_DIR,
+    padding: 1.18,
+  })) {
+    return;
+  }
   flyCameraTo(DEFAULT_CAM_POS, DEFAULT_LOOK());
 }
 
 function viewTopDown() {
   followingEntityKey = null;
   if (viewFollowSel) viewFollowSel.value = "";
-  const target = DEFAULT_LOOK();
-  // Hover above floor centre, looking straight down (with a tiny offset on
-  // Y so the OrbitControls "up" axis doesn't degenerate).
-  const w = floorMesh ? floorMesh.userData.w : 5;
-  const h = floorMesh ? floorMesh.userData.h : 4;
-  const height = Math.max(w, h) * 1.1;
-  const pos = new THREE.Vector3(target.x, target.y - 0.001, height);
-  flyCameraTo(pos, target);
+  userCameraOverride = true;
+  if (fitWorldToView({
+    animate: true,
+    includeEntities: true,
+    direction: TOP_DOWN_VIEW_DIR,
+    padding: 1.08,
+  })) {
+    return;
+  }
+  flyCameraTo(new THREE.Vector3(2.5, 2.499, 7), DEFAULT_LOOK());
 }
 
 function viewFrameAll() {
   followingEntityKey = null;
   if (viewFollowSel) viewFollowSel.value = "";
-  // Build the bounding box of every visible marker + person.
-  const points = [];
-  for (const m of markerMeshes.values()) points.push(m.position.clone());
-  for (const m of personMeshes.values()) points.push(m.position.clone());
-  if (points.length === 0) {
-    viewReset();
-    return;
-  }
-  const box = new THREE.Box3().setFromPoints(points);
-  const target = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3()).length();
-  const dist = Math.max(2.5, size * 1.4);
-  // Pick a viewing direction that mirrors the default 45° orbit.
-  const offset = new THREE.Vector3(1, -1, 1).normalize().multiplyScalar(dist);
-  flyCameraTo(target.clone().add(offset), target);
+  userCameraOverride = true;
+  if (!fitWorldToView({ animate: true, includeEntities: true, padding: 1.16 })) viewReset();
 }
 
 function flyToEntity(entityKey) {
   const ent = lastEntityPos.get(entityKey);
   if (!ent) return;
+  userCameraOverride = true;
   const [x, y] = ent.pos;
   // For people, target chest height; for raw markers, hover slightly above.
   const z = ent.kind === "person" ? 1.0 : 0.4;
@@ -807,6 +987,7 @@ if (viewTopBtn)    viewTopBtn.addEventListener("click", viewTopDown);
 if (viewResetBtn)  viewResetBtn.addEventListener("click", viewReset);
 if (viewFollowSel) viewFollowSel.addEventListener("change", () => {
   followingEntityKey = viewFollowSel.value || null;
+  userCameraOverride = !!followingEntityKey;
 });
 
 // ---------- size + animate ----------------------------------------------
@@ -816,6 +997,14 @@ function onResize() {
   renderer.setSize(r.width, r.height, false);
   camera.aspect = r.width / r.height;
   camera.updateProjectionMatrix();
+  if (floorMesh && !userCameraOverride) {
+    fitWorldToView({
+      animate: false,
+      includeEntities: true,
+      direction: DEFAULT_VIEW_DIR,
+      padding: 1.18,
+    });
+  }
 }
 window.addEventListener("resize", onResize);
 onResize();
@@ -858,6 +1047,8 @@ animate();
 
 // ---------- boot --------------------------------------------------------
 
+renderSceneStats({ cameras: [], people: [], markers: [] });
+updateStageOverlay({ cameras: [], people: [], markers: [] });
 refreshCalibrationBanner();
 setInterval(refreshCalibrationBanner, 5000);
 openSceneWS();

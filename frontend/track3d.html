@@ -8,25 +8,192 @@
 <style>
   .t3d-grid {
     display: grid;
-    grid-template-columns: minmax(0, 2fr) 320px;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
     gap: 16px;
     align-items: flex-start;
   }
   @media (max-width: 1000px) { .t3d-grid { grid-template-columns: 1fr; } }
+  .track3d-main {
+    padding: 12px clamp(12px, 2vw, 20px);
+  }
+  .t3d-overview {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+  }
+  @media (max-width: 800px) { .t3d-overview { grid-template-columns: 1fr; } }
+  .t3d-overview-title {
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .t3d-stats {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  @media (max-width: 800px) { .t3d-stats { justify-content: flex-start; } }
+  .t3d-stat {
+    min-width: 86px;
+    padding: 7px 10px;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    background: #162033;
+  }
+  .t3d-stat strong {
+    display: block;
+    font-size: 18px;
+    line-height: 1;
+    color: #f8fafc;
+  }
+  .t3d-stat span {
+    display: block;
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .t3d-setup {
+    border-left: 4px solid var(--accent);
+  }
+  .t3d-setup-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .t3d-kicker {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: uppercase;
+  }
+  .t3d-setup h2 {
+    margin: 2px 0 0;
+    font-size: 18px;
+  }
+  .t3d-setup-steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+  @media (max-width: 800px) { .t3d-setup-steps { grid-template-columns: 1fr; } }
+  .t3d-step {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    background: #162033;
+  }
+  .t3d-step-index {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #334155;
+    font-weight: 700;
+    color: #dbeafe;
+  }
+  .t3d-step strong {
+    display: block;
+    font-size: 13px;
+  }
+  .t3d-step small {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+    line-height: 1.35;
+  }
+  .t3d-step-state {
+    padding: 3px 7px;
+    border-radius: 6px;
+    background: #334155;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .t3d-step.is-done {
+    border-color: rgba(34, 197, 94, 0.55);
+  }
+  .t3d-step.is-done .t3d-step-index,
+  .t3d-step.is-done .t3d-step-state {
+    background: var(--accent);
+    color: #052e1a;
+  }
+  .t3d-toolbar {
+    margin-bottom: 8px;
+    padding: 8px 12px;
+  }
+  .t3d-toolbar .row {
+    font-size: 13px;
+    flex-wrap: wrap;
+  }
+  .t3d-toolbar-divider {
+    border-left: 1px solid #2a3656;
+    height: 28px;
+    margin: 0 2px;
+  }
   #t3d-canvas-wrap {
     position: relative;
     width: 100%;
-    height: 600px;
+    height: clamp(520px, calc(100vh - 286px), 780px);
+    min-height: 440px;
     background: #060912;
     border-radius: 8px;
+    border: 1px solid #1f2a44;
     overflow: hidden;
   }
   #t3d-canvas-wrap canvas { display: block; }
   #t3d-overlay {
-    position: absolute; top: 8px; left: 12px;
+    position: absolute; bottom: 10px; left: 12px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: rgba(6, 9, 18, 0.72);
     color: #fff; font-family: ui-monospace, SF Mono, monospace;
     font-size: 12px; pointer-events: none;
     text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    z-index: 2;
+  }
+  #t3d-empty-state {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    pointer-events: none;
+    z-index: 3;
+  }
+  #t3d-empty-state .empty-card {
+    width: min(420px, 100%);
+    padding: 18px;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.92);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+    pointer-events: auto;
+  }
+  #t3d-empty-title {
+    margin: 0 0 6px;
+    font-size: 18px;
+  }
+  #t3d-empty-body {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  .t3d-empty-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
   }
   .t3d-legend {
     display: grid;
@@ -45,6 +212,21 @@
     line-height: 1.5;
   }
   .person-card .nm { font-weight: 600; font-size: 14px; }
+  aside.t3d-sidebar {
+    position: sticky;
+    top: 12px;
+    max-height: calc(100vh - 24px);
+    overflow: auto;
+    padding-right: 2px;
+  }
+  @media (max-width: 1000px) {
+    aside.t3d-sidebar {
+      position: static;
+      max-height: none;
+      overflow: visible;
+      padding-right: 0;
+    }
+  }
   #cam-camera-status { font-family: ui-monospace, SF Mono, monospace; font-size: 12px; }
 </style>
 </head>
@@ -58,43 +240,64 @@
     <a href="/track3d" class="active">Track 3D</a>
   </nav>
 </header>
-<main>
+<main class="track3d-main">
   <div class="panel">
-    <div class="row">
-      <span class="muted" style="font-size:13px;">
+    <div class="t3d-overview">
+      <div class="t3d-overview-title muted">
         Observer view — fused live scene from every camera publishing to <code>/ws/detect</code>.
         To publish frames, open <a href="/" target="_blank">/</a> on a device with a webcam.
-      </span>
-      <span class="spacer"></span>
-      <span id="t3d-status" class="status-pill">connecting…</span>
+        <div id="t3d-banner" style="margin-top: 6px; font-size: 13px;"></div>
+      </div>
+      <div>
+        <div class="row" style="justify-content:flex-end; margin-bottom:8px;">
+          <span id="t3d-status" class="status-pill">connecting…</span>
+        </div>
+        <div class="t3d-stats" id="t3d-scene-stats">
+          <div class="t3d-stat"><strong>0</strong><span>cameras</span></div>
+          <div class="t3d-stat"><strong>0</strong><span>people</span></div>
+          <div class="t3d-stat"><strong>0</strong><span>markers</span></div>
+        </div>
+      </div>
     </div>
-    <div id="t3d-banner" style="margin-top: 6px; font-size: 13px;"></div>
   </div>
 
   <!-- Setup guide — hidden once both calibrations are done -->
-  <div class="panel" id="t3d-setup-guide" style="border-left: 4px solid var(--accent);">
-    <h3 style="margin-top:0;">Before you can see the 3D world — 2 one-time steps</h3>
-    <ol style="margin: 0 0 10px 0; padding-left: 20px; line-height: 2;">
-      <li id="setup-step-1">
-        <strong>Intrinsic calibration</strong> — print the ChArUco board, wave it in front of the camera from different angles.
-      </li>
-      <li id="setup-step-2">
-        <strong>Extrinsic calibration</strong> — tape 4 marker cards to the floor corners of your space.
-      </li>
-    </ol>
-    <a href="/admin#cameras"><button class="primary">Open Admin → Cameras to calibrate</button></a>
-    <span class="muted" style="font-size:12px; margin-left: 10px;">Once both steps are done, come back here and press <strong>Start camera</strong>.</span>
+  <div class="panel t3d-setup" id="t3d-setup-guide">
+    <div class="t3d-setup-head">
+      <div>
+        <div class="t3d-kicker">Setup checklist</div>
+        <h2>Make the world frame trustworthy</h2>
+      </div>
+      <a href="/admin#cameras"><button class="primary">Open Cameras</button></a>
+    </div>
+    <div class="t3d-setup-steps">
+      <div class="t3d-step" id="setup-step-1">
+        <span class="t3d-step-index">1</span>
+        <span><strong>Intrinsic calibration</strong><small>Lens model solved for each camera.</small></span>
+        <span class="t3d-step-state" data-step-state>Needed</span>
+      </div>
+      <div class="t3d-step" id="setup-step-2">
+        <span class="t3d-step-index">2</span>
+        <span><strong>Extrinsic calibration</strong><small>Floor corners mapped into metres.</small></span>
+        <span class="t3d-step-state" data-step-state>Needed</span>
+      </div>
+      <div class="t3d-step" id="setup-step-3">
+        <span class="t3d-step-index">3</span>
+        <span><strong>Publishing camera</strong><small>At least one calibrated camera is live.</small></span>
+        <span class="t3d-step-state" data-step-state>Waiting</span>
+      </div>
+    </div>
   </div>
 
   <div class="t3d-grid">
     <div>
-      <div class="panel" style="margin-bottom:8px; padding:8px 12px;">
-        <div class="row" style="font-size:13px; flex-wrap: wrap;">
+      <div class="panel t3d-toolbar">
+        <div class="row">
           <label><input type="checkbox" id="opt-trails" checked /> Trails</label>
           <label><input type="checkbox" id="opt-heatmap" /> Heatmap</label>
           <button id="opt-clear-history" title="Reset trails + heatmap dwell-time accumulator">Clear history</button>
-          <span style="border-left: 1px solid #2a3656; padding-left: 8px; margin-left: 4px;"></span>
-          <button id="view-frame" title="Fit camera to all visible markers">⊡ Frame all</button>
+          <span class="t3d-toolbar-divider" aria-hidden="true"></span>
+          <button id="view-frame" title="Fit camera to the floor and all visible markers">⊡ Frame all</button>
           <button id="view-top" title="Top-down orthographic-ish view">↓ Top-down</button>
           <button id="view-reset" title="Default orbit angle">↺ Reset</button>
           <label title="Continuously track this person.">
@@ -109,6 +312,16 @@
       </div>
       <div id="t3d-canvas-wrap">
         <div id="t3d-overlay">drag = orbit · scroll = zoom · right-drag = pan</div>
+        <div id="t3d-empty-state">
+          <div class="empty-card">
+            <h3 id="t3d-empty-title">Waiting for scene data</h3>
+            <p id="t3d-empty-body">No publishing cameras are connected yet.</p>
+            <div class="t3d-empty-actions">
+              <a href="/" target="_blank"><button class="primary">Open Live</button></a>
+              <a href="/admin#cameras"><button>Open Cameras</button></a>
+            </div>
+          </div>
+        </div>
       </div>
       <details class="panel" style="margin-top: 12px;">
         <summary>What this view shows</summary>
@@ -124,7 +337,7 @@
         </div>
       </details>
     </div>
-    <aside>
+    <aside class="t3d-sidebar">
       <div class="panel">
         <h3 style="margin-top:0;">Publishing cameras</h3>
         <div id="t3d-cameras-list" class="muted">No cameras publishing.</div>
