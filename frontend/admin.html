@@ -23,6 +23,7 @@
     <button data-tab="zones">Zones</button>
     <button data-tab="questions">Questions</button>
     <button data-tab="cameras">Cameras</button>
+    <button data-tab="detector">Detector ⚙️</button>
   </div>
 
   <!-- PEOPLE -->
@@ -346,6 +347,99 @@
           <div id="ex-corners-status" style="font-size:13px;"></div>
           <div id="ex-result" style="font-size:13px; margin-top:8px;"></div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DETECTOR CONFIGURATION -->
+  <section id="tab-detector" hidden>
+    <div class="panel">
+      <h3 style="margin-top:0;">Detector Configuration</h3>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+        <div>
+          <h4>Detector Type</h4>
+          <div class="row">
+            <select id="detector-type" style="flex:1;">
+              <option value="apriltag">AprilTag (tag36h11, 587 markers)</option>
+              <option value="aruco">ArUco (DICT_4X4_100, 100 markers)</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <h4>Dual Detection Mode</h4>
+          <div class="row">
+            <label style="flex:1;">
+              <input id="detector-dual-mode" type="checkbox" />
+              Run both detectors (CPU-heavy, testing only)
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <h4 style="margin-top:20px;">AprilTag Parameters</h4>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; background:#f5f5f5; padding:15px; border-radius:6px;">
+        <div>
+          <label for="apriltag-quad-decimate">
+            Quad Decimate: <span id="quad-decimate-val">4.0</span>
+            <br><small style="color:#666;">1.0 (accurate/slow) → 8.0 (fast/inaccurate)</small>
+          </label>
+          <input id="apriltag-quad-decimate" type="range" min="1" max="8" step="0.5" value="4.0" style="width:100%; margin-top:4px;" />
+        </div>
+        <div>
+          <label for="apriltag-nthreads">
+            Threads: <span id="nthreads-val">4</span>
+            <br><small style="color:#666;">Parallel detection (1-8)</small>
+          </label>
+          <input id="apriltag-nthreads" type="range" min="1" max="8" step="1" value="4" style="width:100%; margin-top:4px;" />
+        </div>
+        <div>
+          <label for="apriltag-quad-sigma">
+            Quad Sigma: <span id="quad-sigma-val">0.0</span>
+            <br><small style="color:#666;">Edge blur (0=off)</small>
+          </label>
+          <input id="apriltag-quad-sigma" type="range" min="0" max="2" step="0.1" value="0.0" style="width:100%; margin-top:4px;" />
+        </div>
+        <div>
+          <label for="apriltag-decode-sharpening">
+            Decode Sharpening: <span id="decode-sharpening-val">0.0</span>
+            <br><small style="color:#666;">Sharpening (0=off)</small>
+          </label>
+          <input id="apriltag-decode-sharpening" type="range" min="0" max="2" step="0.1" value="0.0" style="width:100%; margin-top:4px;" />
+        </div>
+        <div>
+          <label style="display:flex; align-items:center; gap:8px;">
+            <input id="apriltag-refine-edges" type="checkbox" />
+            <span><strong>Refine Edges</strong><br><small style="color:#666;">+10-20% latency, +5% accuracy</small></span>
+          </label>
+        </div>
+      </div>
+
+      <h4 style="margin-top:20px;">Common Parameters</h4>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; background:#f5f5f5; padding:15px; border-radius:6px;">
+        <div>
+          <label for="marker-size">
+            Marker Size (m): <span id="marker-size-val">0.05</span>
+            <br><small style="color:#666;">Physical marker size</small>
+          </label>
+          <input id="marker-size" type="range" min="0.01" max="1" step="0.01" value="0.05" style="width:100%; margin-top:4px;" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:20px; gap:12px;">
+        <button id="detector-test-btn" class="primary">Test Settings</button>
+        <button id="detector-save-btn" class="primary" style="background:#2ecc71;">Save & Apply</button>
+        <button id="detector-reset-btn">Reset to Default</button>
+        <span class="spacer"></span>
+        <span id="detector-status" class="status-pill">Loading...</span>
+      </div>
+
+      <div id="detector-info" style="margin-top:20px; padding:12px; background:#f0f8ff; border-radius:6px; font-size:13px; line-height:1.6;">
+        <strong>💡 Tuning Guide:</strong><br>
+        • <strong>Slow/Accurate:</strong> quad_decimate=1.0, refine_edges=ON → detects 3m+ away<br>
+        • <strong>Balanced:</strong> quad_decimate=2.0, refine_edges=OFF → detects 2m away<br>
+        • <strong>Current (4.0):</strong> good for 1m away<br>
+        • <strong>Fast:</strong> quad_decimate=8.0, refine_edges=OFF → <1m range, instant detection<br>
+        <span id="detector-changes" style="margin-top:10px; display:none; color:#d9534f;"><strong>⚠️ Unsaved changes</strong></span>
       </div>
     </div>
   </section>

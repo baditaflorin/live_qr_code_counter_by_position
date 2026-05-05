@@ -178,6 +178,9 @@ th { color: var(--muted); font-weight: 600; }
 }
 .status-pill.ok { background: var(--accent); color: #052e1a; }
 .status-pill.err { background: var(--danger); color: white; }
+.status-pill.status-info { background: #475569; color: white; }
+.status-pill.status-success { background: var(--accent); color: #052e1a; }
+.status-pill.status-error { background: var(--danger); color: white; }
 
 /* admin marker grid */
 .markers-grid {
