@@ -1,4 +1,4 @@
-"""AprilTag detection helpers (migrated from ArUco).
+"""Detector abstraction with runtime-tunable configuration.
 
 Detection has two layers:
 
@@ -15,44 +15,86 @@ The pose layer is intentionally separate so the live overlay (which only
 needs 2D corners) doesn't pay the calibration-required tax, and so the
 WS payload can fall through gracefully on uncalibrated cameras.
 
-Uses AprilTag family tag36h11 (587 unique IDs).
+Detectors (AprilTag, ArUco) are created via factory pattern with
+runtime-configurable parameters (see detector_config.py, detector_factory.py).
 """
+import os
+import threading
 import time as _time
 from dataclasses import dataclass
 from typing import Optional
 
 import cv2
 import numpy as np
-from pupil_apriltags import Detector
 
 from . import pose_filter as _pose_filter
+from .detector_config import DetectorConfig, ConfigManager
+from .detector_factory import BaseDetector, create_detector
 
-FAMILY = "tag36h11"
-MARKER_SIZE_M = 0.05  # Default physical size in metres (can be overridden per-camera)
+# Module-level state for detector and config (thread-safe)
+_config_manager: Optional[ConfigManager] = None
+_active_detector: Optional[BaseDetector] = None
+_detector_lock = threading.RLock()
 
-# Optimized for real-time detection: aggressive decimation for speed
-_detector = Detector(
-    families=FAMILY,
-    nthreads=4,  # Use all available threads
-    quad_decimate=4.0,  # Decimate by 4x for speed (sacrifice distance range)
-    quad_sigma=0.0,  # No blur — raw detection
-    refine_edges=False,  # Skip edge refinement (faster)
-    decode_sharpening=0.0,  # Minimal sharpening (faster)
-    debug=False
-)
+
+def _init_detector() -> None:
+    """Initialize detector configuration and instance on module import."""
+    global _config_manager, _active_detector
+
+    if _config_manager is not None:
+        return  # Already initialized
+
+    # Load configuration: env → disk → defaults
+    config = DetectorConfig.load_from_env()
+    data_dir = os.environ.get("DATA_DIR", "./data")
+
+    # Try to load from disk (overrides env if file exists)
+    disk_config = DetectorConfig.load_from_disk(data_dir)
+    if disk_config is not None:
+        config = disk_config
+
+    _config_manager = ConfigManager(config)
+    _active_detector = create_detector(config)
+    print(f"Detector initialized: {config.detector_type.value} (marker_size={config.marker_size_m}m)")
+
+
+def get_config() -> DetectorConfig:
+    """Get current detector configuration."""
+    _init_detector()
+    return _config_manager.get_config()  # type: ignore
+
+
+def set_config(config: DetectorConfig, data_dir: str = "./data") -> None:
+    """Update detector configuration and recreate detector instance (thread-safe)."""
+    global _active_detector
+    _init_detector()
+
+    with _detector_lock:
+        _config_manager.set_config(config)  # type: ignore
+        _active_detector = create_detector(config)
+        config.save_to_disk(data_dir)
+        print(f"Detector reconfigured: {config.detector_type.value}")
+
+
+def get_detector() -> BaseDetector:
+    """Get the active detector instance."""
+    _init_detector()
+    return _active_detector  # type: ignore
 
 
 def get_dictionary_name() -> str:
-    return FAMILY
-
-
-def get_dictionary():
-    return _detector
+    """Get the name of the active detector's marker dictionary."""
+    return get_detector().get_dictionary_name()
 
 
 def dictionary_size() -> int:
-    """Number of unique markers in tag36h11 family."""
-    return 587
+    """Get the number of unique markers in the active detector's dictionary."""
+    return get_detector().dictionary_size()
+
+
+def get_dictionary():
+    """Get the active detector instance (for backwards compatibility)."""
+    return get_detector()
 
 
 @dataclass
@@ -81,28 +123,13 @@ class PoseDetection:
 
 
 def detect(frame_bgr: np.ndarray) -> list[Detection]:
-    if frame_bgr is None or frame_bgr.size == 0:
-        return []
-    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    detections = _detector.detect(gray, estimate_tag_pose=False)
-    out: list[Detection] = []
-    for detection in detections:
-        tag_id = detection.tag_id
-        # AprilTag corners come as [[x,y], [x,y], [x,y], [x,y]] in order TL, TR, BR, BL
-        corners_array = np.array(detection.corners, dtype=np.float32)  # Shape (4, 2)
-        center = corners_array.mean(axis=0)
-        out.append(
-            Detection(
-                tag_id=int(tag_id),
-                corners=[[float(p[0]), float(p[1])] for p in corners_array],
-                center=[float(center[0]), float(center[1])],
-                _raw_corners=corners_array,
-            )
-        )
-    return out
+    """Detect markers in frame using the active detector."""
+    with _detector_lock:
+        detector = get_detector()
+        return detector.detect(frame_bgr)
 
 
-# ---------- ADR 0048 pose ---------------------------------------------------
+# ---------- ADR 0048 pose helpers -----------------------------------------------
 
 # Standard marker corner template in marker frame, X-right Y-down Z-out
 # (matches OpenCV's solvePnP convention).  Ordered TL, TR, BR, BL — same as
@@ -120,7 +147,7 @@ def _marker_object_points(side_m: float) -> np.ndarray:
     )
 
 
-def estimate_pose(
+def estimate_pose_apriltag(
     detections: list[Detection],
     K: np.ndarray,
     dist: np.ndarray,
@@ -129,7 +156,7 @@ def estimate_pose(
     filters: Optional[dict[int, "_pose_filter.PoseFilter"]] = None,
     ts: Optional[float] = None,
 ) -> dict[int, PoseDetection]:
-    """6-DOF pose per detected marker (ADR 0048).
+    """AprilTag-specific pose estimation using IPPE (Internal Parameters Projection Error).
 
     Uses `cv2.solvePnPGeneric(SOLVEPNP_IPPE_SQUARE)` to obtain *both* candidate
     solutions for the planar 4-point case, then resolves the flip ambiguity
@@ -168,6 +195,28 @@ def estimate_pose(
             reproj_error_px=err,
         )
     return out
+
+
+def estimate_pose(
+    detections: list[Detection],
+    K: np.ndarray,
+    dist: np.ndarray,
+    marker_size_m: float,
+    *,
+    filters: Optional[dict[int, "_pose_filter.PoseFilter"]] = None,
+    ts: Optional[float] = None,
+) -> dict[int, PoseDetection]:
+    """6-DOF pose per detected marker (ADR 0048).
+
+    Delegates to active detector. For AprilTag: uses `cv2.solvePnPGeneric(SOLVEPNP_IPPE_SQUARE)`
+    to obtain *both* candidate solutions for the planar 4-point case, then resolves the flip
+    ambiguity via the per-marker `PoseFilter` (closest-to-previous on rotation) and
+    applies temporal smoothing.  Without `filters`, falls back to the lower-reprojection
+    candidate per frame (legacy behaviour).
+    """
+    with _detector_lock:
+        detector = get_detector()
+        return detector.estimate_pose(detections, K, dist, marker_size_m, filters=filters, ts=ts)
 
 
 # ---------- zone helpers (unchanged) ---------------------------------------

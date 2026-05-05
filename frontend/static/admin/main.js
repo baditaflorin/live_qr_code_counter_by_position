@@ -8,6 +8,7 @@ import { initMarkers, loadMarkers } from "./markers.js";
 import { initZones, loadZones } from "./zones.js";
 import { initQuestions, loadQuestions } from "./questions.js";
 import { initCameras, loadCameras } from "./cameras.js";
+import { initDetector, loadDetector } from "./detector.js";
 
 const TABS = {
   people:    { load: loadPeople },
@@ -15,6 +16,7 @@ const TABS = {
   zones:     { load: loadZones },
   questions: { load: loadQuestions },
   cameras:   { load: loadCameras },
+  detector:  { load: loadDetector },
 };
 
 const tabBtns = document.querySelectorAll(".tabs button");
@@ -40,6 +42,7 @@ initMarkers();
 initZones();
 initQuestions();
 initCameras();
+initDetector();
 
 // Activate tab from URL hash, defaulting to people.
 const initialTab = window.location.hash.replace("#", "") || "people";
