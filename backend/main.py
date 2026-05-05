@@ -924,6 +924,140 @@ def _overall_verdict(verdicts: list[str]) -> str:
     return "green"
 
 
+# ---------- detector configuration (runtime-tunable) ----------
+
+@app.get("/api/admin/detector/config")
+def get_detector_config():
+    """Get current detector configuration."""
+    config = detection.get_config()
+    return config.to_dict()
+
+
+@app.post("/api/admin/detector/config")
+def set_detector_config(config_dict: dict):
+    """Update detector configuration at runtime.
+
+    Changes are applied immediately and persisted to {DATA_DIR}/detector_config.json.
+    Detector instance is recreated with new parameters.
+    """
+    try:
+        from .detector_config import DetectorConfig
+        new_config = DetectorConfig.from_dict(config_dict)
+        data_dir = os.environ.get("DATA_DIR", "./data")
+        detection.set_config(new_config, data_dir)
+        return {
+            "status": "success",
+            "message": f"Detector reconfigured: {new_config.detector_type.value}",
+            "config": new_config.to_dict(),
+        }
+    except Exception as e:
+        raise HTTPException(400, f"Failed to update detector config: {str(e)}")
+
+
+@app.get("/api/admin/detector/schema")
+def get_detector_schema():
+    """Get JSON schema for detector configuration parameters.
+
+    Used by frontend UI to render configuration form with parameter ranges.
+    """
+    return {
+        "detector_type": {
+            "type": "enum",
+            "values": ["apriltag", "aruco"],
+            "description": "Which detector implementation to use",
+            "default": "apriltag",
+        },
+        "marker_size_m": {
+            "type": "number",
+            "min": 0.01,
+            "max": 1.0,
+            "step": 0.01,
+            "description": "Physical marker size in metres",
+            "default": 0.05,
+        },
+        "dual_detection_mode": {
+            "type": "boolean",
+            "description": "Run both AprilTag and ArUco detectors (CPU-heavy, for testing only)",
+            "default": False,
+        },
+        "apriltag": {
+            "quad_decimate": {
+                "type": "number",
+                "min": 1.0,
+                "max": 8.0,
+                "step": 0.5,
+                "description": "Speed optimization (1.0=accurate/slow, 8.0=fast/inaccurate)",
+                "default": 4.0,
+            },
+            "quad_sigma": {
+                "type": "number",
+                "min": 0.0,
+                "max": 2.0,
+                "step": 0.1,
+                "description": "Edge blur (0.0=off, higher=more blur)",
+                "default": 0.0,
+            },
+            "refine_edges": {
+                "type": "boolean",
+                "description": "CPU-intensive edge refinement (improves accuracy ~5%, costs ~10-20% latency)",
+                "default": False,
+            },
+            "decode_sharpening": {
+                "type": "number",
+                "min": 0.0,
+                "max": 2.0,
+                "step": 0.1,
+                "description": "Sharpening filter (0.0=off, higher=more sharpen)",
+                "default": 0.0,
+            },
+            "nthreads": {
+                "type": "integer",
+                "min": 1,
+                "max": 8,
+                "description": "Parallel detection threads",
+                "default": 4,
+            },
+        },
+        "aruco": {
+            "adaptiveThreshWinSizeMin": {
+                "type": "integer",
+                "min": 3,
+                "max": 20,
+                "description": "Minimum adaptive threshold window size",
+                "default": 5,
+            },
+            "adaptiveThreshWinSizeMax": {
+                "type": "integer",
+                "min": 10,
+                "max": 80,
+                "description": "Maximum adaptive threshold window size",
+                "default": 35,
+            },
+            "adaptiveThreshWinSizeStep": {
+                "type": "integer",
+                "min": 1,
+                "max": 10,
+                "description": "Window size step for adaptive threshold",
+                "default": 6,
+            },
+            "minMarkerPerimeterRate": {
+                "type": "number",
+                "min": 0.01,
+                "max": 0.5,
+                "step": 0.01,
+                "description": "Minimum marker perimeter rate (filters small detections)",
+                "default": 0.02,
+            },
+            "cornerRefinementMethod": {
+                "type": "enum",
+                "values": ["CORNER_REFINE_NONE", "CORNER_REFINE_SUBPIX"],
+                "description": "Corner refinement method",
+                "default": "CORNER_REFINE_SUBPIX",
+            },
+        },
+    }
+
+
 # ---------- observability surfaces (ADR 0009 + 0036) ----------
 
 @app.get("/api/metrics")
