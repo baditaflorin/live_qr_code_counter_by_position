@@ -30,7 +30,16 @@ from . import pose_filter as _pose_filter
 FAMILY = "tag36h11"
 MARKER_SIZE_M = 0.05  # Default physical size in metres (can be overridden per-camera)
 
-_detector = Detector(families=FAMILY, nthreads=1, quad_decimate=2.0, quad_sigma=0.0, refine_edges=True, decode_sharpening=0.25, debug=False)
+# Optimized for real-time detection: aggressive decimation for speed
+_detector = Detector(
+    families=FAMILY,
+    nthreads=4,  # Use all available threads
+    quad_decimate=4.0,  # Decimate by 4x for speed (sacrifice distance range)
+    quad_sigma=0.0,  # No blur — raw detection
+    refine_edges=False,  # Skip edge refinement (faster)
+    decode_sharpening=0.0,  # Minimal sharpening (faster)
+    debug=False
+)
 
 
 def get_dictionary_name() -> str:
