@@ -93,8 +93,8 @@ def dictionary_size() -> int:
 
 
 def get_dictionary():
-    """Get the active detector instance (for backwards compatibility)."""
-    return get_detector()
+    """Get the ArUco dictionary object from the active detector (for ChArUco calibration)."""
+    return get_detector().get_dictionary()
 
 
 @dataclass
