@@ -1,6 +1,5 @@
 """Generate AprilTag marker images and printable PDFs using official precomputed markers."""
 import io
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -11,31 +10,33 @@ MARKER_PIXEL_SIZE = 600  # high-res so prints stay crisp
 # Path to precomputed official AprilTag images
 _APRILTAGS_DIR = Path(__file__).parent / "apriltags" / "tag36h11"
 
+# Cache for loaded images (memory optimization to avoid disk I/O per request)
+_image_cache: dict[int, Image.Image] = {}
+
 
 def _load_official_apriltag(tag_id: int) -> Image.Image:
-    """Load the official AprilTag image from the precomputed library.
+    """Load the official AprilTag image from cache or disk.
 
-    Falls back to a simple placeholder if the image is not available.
+    Caches images in memory to avoid repeated disk I/O.
     """
+    # Check cache first
+    if tag_id in _image_cache:
+        return _image_cache[tag_id]
+
     filename = f"tag36_11_{tag_id:05d}.png"
     filepath = _APRILTAGS_DIR / filename
 
     if filepath.exists():
         try:
-            img = Image.open(filepath)
-            return img.convert("L")  # Convert to grayscale
+            img = Image.open(filepath).convert("L")  # Load and convert to grayscale
+            _image_cache[tag_id] = img
+            return img
         except Exception:
             pass
 
     # Fallback: create a simple placeholder if image not found
-    # This is just for development; in production all 587 images should be present
     img = Image.new("L", (200, 200), color=255)
-    pixels = img.load()
-    # Draw a simple pattern based on tag ID
-    for i in range(200):
-        for j in range(200):
-            if (i + j + tag_id) % 20 < 10:
-                pixels[i, j] = 0
+    _image_cache[tag_id] = img
     return img
 
 
