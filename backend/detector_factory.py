@@ -41,6 +41,11 @@ class BaseDetector(ABC):
         """Get the number of unique markers in the dictionary."""
         pass
 
+    @abstractmethod
+    def get_dictionary(self):
+        """Get the actual cv2.aruco dictionary object for ChArUco calibration."""
+        pass
+
 
 class AprilTagDetector(BaseDetector):
     """AprilTag detector using pupil-apriltags library."""
@@ -98,6 +103,10 @@ class AprilTagDetector(BaseDetector):
 
     def dictionary_size(self) -> int:
         return 587
+
+    def get_dictionary(self):
+        """Return the ArUco-compatible tag36h11 dictionary for ChArUco calibration."""
+        return cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
 
 
 class ArUcoDetector(BaseDetector):
@@ -201,6 +210,10 @@ class ArUcoDetector(BaseDetector):
     def dictionary_size(self) -> int:
         return 100
 
+    def get_dictionary(self):
+        """Return the ArUco dictionary object for this detector."""
+        return self._dictionary
+
     @staticmethod
     def _marker_object_points(side_m: float) -> np.ndarray:
         """Standard marker corner template in marker frame."""
@@ -258,6 +271,9 @@ class DualDetector(BaseDetector):
 
     def dictionary_size(self) -> int:
         return self._primary.dictionary_size()
+
+    def get_dictionary(self):
+        return self._primary.get_dictionary()
 
 
 def create_detector(config: DetectorConfig) -> BaseDetector:
