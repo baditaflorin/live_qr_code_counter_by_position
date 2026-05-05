@@ -11,12 +11,20 @@ const DEFAULT_CONFIG = {
     decode_sharpening: 0.0,
     nthreads: 4,
   },
+  aruco: {
+    adaptiveThreshWinSizeMin: 5,
+    adaptiveThreshWinSizeMax: 35,
+    adaptiveThreshWinSizeStep: 6,
+    minMarkerPerimeterRate: 0.02,
+    cornerRefinementMethod: "CORNER_REFINE_SUBPIX",
+  },
 };
 
-let currentConfig = { ...DEFAULT_CONFIG };
-let savedConfig = { ...DEFAULT_CONFIG };
+let currentConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+let savedConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 
 function getFormConfig() {
+  // Build config from form, preserving ArUco params from savedConfig
   return {
     detector_type: document.getElementById("detector-type").value,
     marker_size_m: parseFloat(document.getElementById("marker-size").value),
@@ -28,6 +36,7 @@ function getFormConfig() {
       decode_sharpening: parseFloat(document.getElementById("apriltag-decode-sharpening").value),
       nthreads: parseInt(document.getElementById("apriltag-nthreads").value),
     },
+    aruco: savedConfig.aruco, // Preserve ArUco config from server
   };
 }
 
