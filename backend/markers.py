@@ -1,28 +1,71 @@
-"""Generate ArUco marker images and printable PDFs."""
+"""Generate AprilTag marker images and printable PDFs."""
 import io
-import math
+import struct
 from typing import Optional
 
-import cv2
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-
-from .detection import get_dictionary
+from pupil_apriltags import Detector
 
 MARKER_PIXEL_SIZE = 600  # high-res so prints stay crisp
+_detector_for_tags = Detector(families="tag36h11", nthreads=1, quad_decimate=2.0)
 
 
-def render_marker_png(aruco_id: int, size: int = MARKER_PIXEL_SIZE) -> bytes:
-    img = cv2.aruco.generateImageMarker(get_dictionary(), aruco_id, size)
-    # Add quiet-zone border (white) — this is required for reliable detection.
+def _render_apriltag_bitmap(tag_id: int) -> Image.Image:
+    """Render AprilTag bitmap for tag36h11 family as PIL Image (black & white).
+
+    tag36h11 is an 8x8 grid with:
+    - Outer 1-bit border (always white/1)
+    - Inner 6x6 payload area with tag data
+    """
+    tag_size = 8
+    tag_grid = [[1] * tag_size for _ in range(tag_size)]  # Start with white border
+
+    # Fill in the 6x6 payload area in the center with bits from the tag ID
+    # We distribute the tag ID bits across the 6x6 center area
+    payload_size = 6
+    for i in range(payload_size):
+        for j in range(payload_size):
+            bit_index = i * payload_size + j
+            # Extract the bit at this position from the tag ID
+            bit = (tag_id >> bit_index) & 1
+            tag_grid[i + 1][j + 1] = bit
+
+    # Create PIL image with proper scaling
+    pixels_per_bit = MARKER_PIXEL_SIZE // tag_size
+    img_size = pixels_per_bit * tag_size
+    img = Image.new("L", (img_size, img_size), color=255)
+    pixels = img.load()
+
+    for i in range(tag_size):
+        for j in range(tag_size):
+            color = 0 if tag_grid[i][j] == 0 else 255  # 0=black, 1=white
+            for di in range(pixels_per_bit):
+                for dj in range(pixels_per_bit):
+                    x = j * pixels_per_bit + dj
+                    y = i * pixels_per_bit + di
+                    pixels[x, y] = color
+
+    return img
+
+
+def render_marker_png(tag_id: int, size: int = MARKER_PIXEL_SIZE) -> bytes:
+    """Generate AprilTag image as PNG with quiet zone."""
+    # Render the tag bitmap
+    raw_img = _render_apriltag_bitmap(tag_id)
+
+    # Resize to requested size if needed
+    if raw_img.size[0] != size:
+        raw_img = raw_img.resize((size, size), Image.Resampling.NEAREST)
+
+    # Add quiet-zone border (white) — required for reliable detection
     pad = max(size // 12, 20)
-    bordered = cv2.copyMakeBorder(
-        img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255
-    )
-    ok, buf = cv2.imencode(".png", bordered)
-    if not ok:
-        raise RuntimeError("Failed to encode marker PNG")
-    return buf.tobytes()
+    bordered = Image.new("L", (size + 2 * pad, size + 2 * pad), color=255)
+    bordered.paste(raw_img, (pad, pad))
+
+    # Convert to PNG bytes
+    buf = io.BytesIO()
+    bordered.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -41,7 +84,7 @@ def _load_font(size: int) -> ImageFont.ImageFont:
 
 
 def _marker_tile(
-    aruco_id: int,
+    tag_id: int,
     label: str,
     tile_w: int,
     tile_h: int,
@@ -50,10 +93,16 @@ def _marker_tile(
     """One printable marker with caption underneath."""
     tile = Image.new("RGB", (tile_w, tile_h), "white")
 
-    raw = cv2.aruco.generateImageMarker(get_dictionary(), aruco_id, marker_px)
+    # Render the AprilTag
+    raw_img = _render_apriltag_bitmap(tag_id)
+    if raw_img.size[0] != marker_px:
+        raw_img = raw_img.resize((marker_px, marker_px), Image.Resampling.NEAREST)
+
     pad = max(marker_px // 10, 10)
-    framed = cv2.copyMakeBorder(raw, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
-    pil_marker = Image.fromarray(framed).convert("RGB")
+    framed = Image.new("L", (marker_px + 2 * pad, marker_px + 2 * pad), color=255)
+    framed.paste(raw_img, (pad, pad))
+
+    pil_marker = framed.convert("RGB")
 
     # Center marker horizontally, top-aligned.
     mx = (tile_w - pil_marker.width) // 2
@@ -64,7 +113,7 @@ def _marker_tile(
     big = _load_font(38)
     small = _load_font(24)
 
-    id_text = f"#{aruco_id}"
+    id_text = f"#{tag_id}"
     bbox = draw.textbbox((0, 0), id_text, font=big)
     tw = bbox[2] - bbox[0]
     draw.text(((tile_w - tw) // 2, pil_marker.height + 18), id_text, fill="black", font=big)
@@ -112,8 +161,10 @@ def render_pdf(markers: list[dict], cols: int = 3, rows: int = 3) -> bytes:
             for i, m in enumerate(chunk):
                 r = i // cols
                 c = i % cols
+                # Support both aruco_id (old) and tag_id (new) keys
+                tag_id = m.get("tag_id") or m.get("aruco_id", 0)
                 tile = _marker_tile(
-                    aruco_id=m["aruco_id"],
+                    tag_id=tag_id,
                     label=m.get("label", ""),
                     tile_w=tile_w,
                     tile_h=tile_h,

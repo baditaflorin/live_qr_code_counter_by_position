@@ -1,4 +1,4 @@
-"""ArUco detection helpers.
+"""AprilTag detection helpers (migrated from ArUco).
 
 Detection has two layers:
 
@@ -14,86 +14,80 @@ applies a quaternion-slerp smoother — see `pose_filter.py`.
 The pose layer is intentionally separate so the live overlay (which only
 needs 2D corners) doesn't pay the calibration-required tax, and so the
 WS payload can fall through gracefully on uncalibrated cameras.
+
+Uses AprilTag family tag36h11 (587 unique IDs).
 """
-import os
 import time as _time
 from dataclasses import dataclass
 from typing import Optional
 
 import cv2
 import numpy as np
+from pupil_apriltags import Detector
 
 from . import pose_filter as _pose_filter
 
-DICT_NAME = os.environ.get("ARUCO_DICTIONARY", "DICT_4X4_100")
+FAMILY = "tag36h11"
+MARKER_SIZE_M = 0.05  # Default physical size in metres (can be overridden per-camera)
 
-
-def _resolve_dictionary(name: str):
-    attr = getattr(cv2.aruco, name, None)
-    if attr is None:
-        raise ValueError(f"Unknown ArUco dictionary: {name}")
-    return cv2.aruco.getPredefinedDictionary(attr)
-
-
-_dictionary = _resolve_dictionary(DICT_NAME)
-_params = cv2.aruco.DetectorParameters()
-# Tweaks that help at distance / oblique angles.
-_params.adaptiveThreshWinSizeMin = 5
-_params.adaptiveThreshWinSizeMax = 35
-_params.adaptiveThreshWinSizeStep = 6
-_params.minMarkerPerimeterRate = 0.02
-_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-
-_detector = cv2.aruco.ArucoDetector(_dictionary, _params)
+_detector = Detector(families=FAMILY, nthreads=1, quad_decimate=2.0, quad_sigma=0.0, refine_edges=True, decode_sharpening=0.25, debug=False)
 
 
 def get_dictionary_name() -> str:
-    return DICT_NAME
+    return FAMILY
 
 
 def get_dictionary():
-    return _dictionary
+    return _detector
 
 
 def dictionary_size() -> int:
-    """Number of unique markers in the active dictionary."""
-    return int(_dictionary.bytesList.shape[0])
+    """Number of unique markers in tag36h11 family."""
+    return 587
 
 
 @dataclass
 class Detection:
-    aruco_id: int
-    corners: list[list[float]]  # 4 corners as [[x,y]...]
+    tag_id: int
+    corners: list[list[float]]  # 4 corners as [[x,y]...] in TL, TR, BR, BL order
     center: list[float]
     # Raw 4x2 numpy corners — kept around for pose estimation downstream.
     _raw_corners: np.ndarray = None  # type: ignore[assignment]
+    # Legacy field for backwards compatibility with code using aruco_id
+    @property
+    def aruco_id(self) -> int:
+        return self.tag_id
 
 
 @dataclass
 class PoseDetection:
-    aruco_id: int
+    tag_id: int
     rvec: np.ndarray  # (3,) Rodrigues rotation in camera frame
     tvec: np.ndarray  # (3,) translation in camera frame, metres
     reproj_error_px: float
+    # Legacy field for backwards compatibility
+    @property
+    def aruco_id(self) -> int:
+        return self.tag_id
 
 
 def detect(frame_bgr: np.ndarray) -> list[Detection]:
     if frame_bgr is None or frame_bgr.size == 0:
         return []
     gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    corners, ids, _ = _detector.detectMarkers(gray)
+    detections = _detector.detect(gray, estimate_tag_pose=False)
     out: list[Detection] = []
-    if ids is None:
-        return out
-    for i, mid in enumerate(ids.flatten().tolist()):
-        c = corners[i].reshape(-1, 2)  # 4x2
-        center = c.mean(axis=0)
+    for detection in detections:
+        tag_id = detection.tag_id
+        # AprilTag corners come as [[x,y], [x,y], [x,y], [x,y]] in order TL, TR, BR, BL
+        corners_array = np.array(detection.corners, dtype=np.float32)  # Shape (4, 2)
+        center = corners_array.mean(axis=0)
         out.append(
             Detection(
-                aruco_id=int(mid),
-                corners=[[float(p[0]), float(p[1])] for p in c],
+                tag_id=int(tag_id),
+                corners=[[float(p[0]), float(p[1])] for p in corners_array],
                 center=[float(center[0]), float(center[1])],
-                _raw_corners=c.astype(np.float32),
+                _raw_corners=corners_array,
             )
         )
     return out
@@ -149,7 +143,7 @@ def estimate_pose(
             continue
 
         if filters is not None:
-            f = filters.setdefault(d.aruco_id, _pose_filter.PoseFilter())
+            f = filters.setdefault(d.tag_id, _pose_filter.PoseFilter())
             res = f.update(candidates, ts)
             if res is None:
                 continue
@@ -158,8 +152,8 @@ def estimate_pose(
             best = min(candidates, key=lambda c: c.reproj_error_px)
             rvec, tvec, err = best.rvec, best.tvec, best.reproj_error_px
 
-        out[d.aruco_id] = PoseDetection(
-            aruco_id=d.aruco_id,
+        out[d.tag_id] = PoseDetection(
+            tag_id=d.tag_id,
             rvec=np.asarray(rvec).reshape(3),
             tvec=np.asarray(tvec).reshape(3),
             reproj_error_px=err,

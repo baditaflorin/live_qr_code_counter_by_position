@@ -9,3 +9,4 @@ python-multipart==0.0.12
 qrcode[pil]==7.4.2
 alembic==1.13.3
 structlog==24.4.0
+pupil-apriltags==1.0.4.post11
