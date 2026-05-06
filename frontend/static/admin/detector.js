@@ -112,7 +112,7 @@ async function applyConfig(persist = false) {
 
     const response = await api("/api/admin/detector/config", {
       method: "POST",
-      body: JSON.stringify(config),
+      body: config,
     });
 
     savedConfig = JSON.parse(JSON.stringify(config));
