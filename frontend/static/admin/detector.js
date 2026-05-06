@@ -96,7 +96,12 @@ async function loadDetectorConfig() {
     updateUnsavedIndicator();
   } catch (err) {
     console.error("Failed to load detector config:", err);
-    showStatus("Error loading config", "error");
+    let errorMsg = "Error loading config";
+    if (err && typeof err === "object") {
+      if (err.message) errorMsg = err.message;
+      else if (err.detail) errorMsg = err.detail;
+    }
+    showStatus(errorMsg, "error");
   }
 }
 
@@ -120,7 +125,13 @@ async function applyConfig(persist = false) {
     }
   } catch (err) {
     console.error("Failed to apply detector config:", err);
-    showStatus("Error: " + (err.message || "Failed to apply"), "error");
+    let errorMsg = "Failed to apply";
+    if (err && typeof err === "object") {
+      if (err.message) errorMsg = err.message;
+      else if (err.detail) errorMsg = err.detail;
+      else if (err.statusText) errorMsg = err.statusText;
+    }
+    showStatus("Error: " + errorMsg, "error");
   }
 }
 
