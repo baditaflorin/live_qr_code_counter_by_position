@@ -1333,6 +1333,23 @@ def clear_extrinsic(camera_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@app.get("/api/version")
+def get_version():
+    """Get backend version and git commit info."""
+    import subprocess
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd="/app", text=True).strip()
+        branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd="/app", text=True).strip()
+    except:
+        commit = "unknown"
+        branch = "unknown"
+    return {
+        "backend": "live-qr",
+        "commit": commit,
+        "branch": branch,
+    }
+
+
 @app.get("/api/calibration/charuco-board.png")
 def charuco_board_png(size_px: int = 1500):
     png = pose_mod.render_charuco_board_png(detection.get_dictionary(), size_px=size_px)
