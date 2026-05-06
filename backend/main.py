@@ -2419,6 +2419,15 @@ async def ws_detect(ws: WebSocket):
             marker_obs: list[scene_mod.MarkerObservation] = []
             person_marker_obs: list[scene_mod.MarkerObservation] = []
             participant_events: list[dict] = []
+            intrinsic_ready = bool(cached_camera and cached_camera.get("K") is not None)
+            extrinsic_ready = bool(cached_camera and cached_camera.get("R") is not None)
+            camera_world_frame: Optional[dict] = None
+            if cached_camera:
+                camera_world_frame = {
+                    "floor_w_m": cached_camera["floor_w_m"],
+                    "floor_h_m": cached_camera["floor_h_m"],
+                    "camera_position_world_m": cached_camera.get("camera_pos_world"),
+                }
             if cached_camera and cached_camera.get("R") is not None and poses:
                 extrinsic = pose_mod.Extrinsic(
                     R=np.array(cached_camera["R"], dtype=np.float64),
@@ -2475,11 +2484,7 @@ async def ws_detect(ws: WebSocket):
 
                 coverage = round(100.0 * len(poses) / max(1, len(pose_inputs)), 1)
                 scene_payload = {
-                    "world_frame": {
-                        "floor_w_m": cached_camera["floor_w_m"],
-                        "floor_h_m": cached_camera["floor_h_m"],
-                        "camera_position_world_m": cached_camera.get("camera_pos_world"),
-                    },
+                    "world_frame": camera_world_frame,
                     "markers": [scene_mod.serialize_marker(m) for m in marker_obs],
                     "people":  [scene_mod.serialize_person(p) for p in people],
                     "coverage_pct": coverage,
@@ -2493,9 +2498,24 @@ async def ws_detect(ws: WebSocket):
                     markers=marker_obs,
                     world_frame=scene_payload["world_frame"],
                     fps=est_fps,
-                    intrinsic_calibrated=True,
-                    extrinsic_calibrated=True,
+                    intrinsic_calibrated=intrinsic_ready,
+                    extrinsic_calibrated=extrinsic_ready,
                     coverage_pct=coverage,
+                )
+            elif cached_camera and camera_world_frame:
+                # A camera is still publishing even when it is uncalibrated or
+                # sees zero pose-estimable markers. Track3D needs that liveness
+                # so it can say "calibration incomplete" or "no markers yet"
+                # instead of the misleading "no publishing cameras".
+                await aggregator.update_camera(
+                    camera_id=cached_camera["id"],
+                    camera_name=cached_camera.get("name") or f"camera-{cached_camera['id']}",
+                    markers=[],
+                    world_frame=camera_world_frame,
+                    fps=est_fps,
+                    intrinsic_calibrated=intrinsic_ready,
+                    extrinsic_calibrated=extrinsic_ready,
+                    coverage_pct=0.0,
                 )
 
             detections_payload = []
